@@ -20,7 +20,9 @@ data class PurchaseInvoiceEntity(
     val originalAmount: BigDecimal = BigDecimal.ZERO,  // المبلغ بالعملة الأصلية
     val paidAmount: BigDecimal = BigDecimal.ZERO,
     val paymentMethod: String = "نقداً",
-    val status: String = "APPROVED", // "APPROVED", "DRAFT"
+    val status: String = "APPROVED", // "APPROVED", "DRAFT", "VOIDED"
+    val isVoided: Boolean = false,
+    val voidReason: String = "",
     val notes: String = "",
     val itemsSummary: String = "",
     val itemsJson: String = "[]",

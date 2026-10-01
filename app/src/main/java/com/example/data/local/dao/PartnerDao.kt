@@ -12,16 +12,22 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PartnerDao {
-    @Query("SELECT * FROM partners ORDER BY capitalInvested DESC")
+    @Query("SELECT * FROM partners ORDER BY CAST(capitalInvested AS REAL) DESC")
     fun getAllPartners(): Flow<List<PartnerEntity>>
+
+    @Query("SELECT * FROM partners WHERE isActive = 1 ORDER BY id ASC")
+    suspend fun getActivePartnersList(): List<PartnerEntity>
+
+    @Query("SELECT * FROM partners ORDER BY id ASC")
+    suspend fun getAllPartnersList(): List<PartnerEntity>
 
     @Query("SELECT * FROM partners WHERE id = :id LIMIT 1")
     suspend fun getPartnerById(id: Long): PartnerEntity?
 
-    @Query("SELECT SUM(capitalInvested) FROM partners WHERE isActive = 1")
+    @Query("SELECT SUM(CAST(capitalInvested AS REAL)) FROM partners WHERE isActive = 1")
     fun getTotalInvestedCapital(): Flow<Double?>
 
-    @Query("SELECT SUM(totalWithdrawnProfit) FROM partners")
+    @Query("SELECT SUM(CAST(totalWithdrawnProfit AS REAL)) FROM partners")
     fun getTotalDistributedProfits(): Flow<Double?>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

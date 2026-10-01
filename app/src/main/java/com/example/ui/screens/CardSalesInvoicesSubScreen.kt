@@ -397,7 +397,7 @@ fun CardSalesInvoicesSubScreen(
                         invoice = invoice,
                         isHighlighted = isRecent,
                         isExpanded = isExpanded,
-                        retailerBalanceOwed = matchedRetailer?.balanceOwed,
+                        retailerBalanceOwed = matchedRetailer?.balanceOwed?.toDouble(),
                         onClick = {
                             expandedInvoiceId = if (isExpanded) null else invoice.id
                         },

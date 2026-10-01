@@ -112,7 +112,7 @@ object WhatsAppHelper {
         val dateStr = SimpleDateFormat("yyyy/MM/dd - HH:mm", Locale("ar")).format(Date())
         val paidNow = if (paymentMethod.contains("آجل")) 0 else totalWholesale
         val remainingInvoice = if (paymentMethod.contains("آجل")) totalWholesale else 0
-        val totalBalanceOwed = (retailer.balanceOwed + remainingInvoice).toInt()
+        val totalBalanceOwed = (retailer.balanceOwed.toDouble() + remainingInvoice).toInt()
 
         val builder = StringBuilder()
         builder.appendLine("🧾 *فاتورة مبيعات كروت - $NETWORK_BRAND_NAME*")

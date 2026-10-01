@@ -11,10 +11,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface RetailerDao {
-    @Query("SELECT * FROM retailers ORDER BY balanceOwed DESC")
+    @Query("SELECT * FROM retailers ORDER BY CAST(balanceOwed AS REAL) DESC")
     fun getAllRetailers(): Flow<List<RetailerEntity>>
 
-    @Query("SELECT * FROM retailers ORDER BY balanceOwed DESC")
+    @Query("SELECT * FROM retailers ORDER BY CAST(balanceOwed AS REAL) DESC")
     suspend fun getRetailersList(): List<RetailerEntity>
 
     @Query("SELECT * FROM retailers WHERE id = :id")
@@ -29,10 +29,10 @@ interface RetailerDao {
     @Delete
     suspend fun deleteRetailer(retailer: RetailerEntity)
 
-    @Query("UPDATE retailers SET balanceOwed = balanceOwed + :amountDelta, activeCardsCount = activeCardsCount + :cardsDelta WHERE id = :retailerId")
+    @Query("UPDATE retailers SET balanceOwed = CAST((CAST(balanceOwed AS REAL) + :amountDelta) AS TEXT), activeCardsCount = activeCardsCount + :cardsDelta WHERE id = :retailerId")
     suspend fun updateBalanceAndCards(retailerId: Long, amountDelta: Double, cardsDelta: Int)
 
-    @Query("UPDATE retailers SET balanceOwed = balanceOwed - :paymentAmount, totalPaid = totalPaid + :paymentAmount WHERE id = :retailerId")
+    @Query("UPDATE retailers SET balanceOwed = CAST((CAST(balanceOwed AS REAL) - :paymentAmount) AS TEXT), totalPaid = CAST((CAST(totalPaid AS REAL) + :paymentAmount) AS TEXT) WHERE id = :retailerId")
     suspend fun recordPayment(retailerId: Long, paymentAmount: Double)
 
     @Query("DELETE FROM retailers")

@@ -28,5 +28,7 @@ data class CardSalesInvoiceEntity(
     val notes: String = "",
     val issuerName: String = "المهندس حسن",
     val status: String = "PAID", // "PAID", "CREDIT", "PARTIAL"
+    val isVoided: Boolean = false,
+    val voidReason: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

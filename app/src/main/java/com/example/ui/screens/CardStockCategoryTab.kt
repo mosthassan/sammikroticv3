@@ -59,7 +59,7 @@ fun CardStockCategoryTab(
 
     // حساب الإحصائيات العامة للمخزون
     val totalStockCards = inventoryItems.sumOf { it.quantityAvailable }
-    val totalInventoryValuation = inventoryItems.sumOf { it.quantityAvailable * it.wholesalePrice }
+    val totalInventoryValuation = inventoryItems.sumOf { it.quantityAvailable * it.wholesalePriceDouble }
     val lowStockCount = inventoryItems.count { it.quantityAvailable in 1..50 }
     val outOfStockCount = inventoryItems.count { it.quantityAvailable == 0 }
 
@@ -367,9 +367,9 @@ private fun CategoryStockCard(
         else -> "متوفر بالمخزن"
     }
 
-    val totalWholesaleValuation = item.quantityAvailable * item.wholesalePrice
-    val totalRetailValuation = item.quantityAvailable * item.retailPrice
-    val unitProfit = (item.retailPrice - item.wholesalePrice).coerceAtLeast(0.0)
+    val totalWholesaleValuation = item.quantityAvailable * item.wholesalePriceDouble
+    val totalRetailValuation = item.quantityAvailable * item.retailPriceDouble
+    val unitProfit = (item.retailPriceDouble - item.wholesalePriceDouble).coerceAtLeast(0.0)
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -692,8 +692,8 @@ fun QuickStockSupplyDialog(
                                         selectedPackageName = name
                                         val p = packages.find { it.name == name }
                                         val e = existingItems.find { it.packageName == name }
-                                        wholesalePriceText = (p?.wholesalePrice ?: e?.wholesalePrice ?: 180.0).toInt().toString()
-                                        retailPriceText = (p?.retailPrice ?: e?.retailPrice ?: 200.0).toInt().toString()
+                                        wholesalePriceText = (p?.wholesalePrice?.toDouble() ?: e?.wholesalePriceDouble ?: 180.0).toInt().toString()
+                                        retailPriceText = (p?.retailPrice?.toDouble() ?: e?.retailPriceDouble ?: 200.0).toInt().toString()
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {

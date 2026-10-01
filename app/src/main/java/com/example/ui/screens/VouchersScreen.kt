@@ -102,6 +102,7 @@ import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.WhatsAppDarkGreen
 import com.example.ui.theme.WhatsAppGreen
 import com.example.util.WhatsAppHelper
+import com.example.util.*
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -377,7 +378,7 @@ fun VouchersListSubScreen(
                             },
                             onPreview = { voucherToPreview = voucher },
                             onWhatsAppShare = {
-                                val msg = WhatsAppHelper.generateVoucherMessage(voucher, linkedRetailer?.phone, linkedRetailer?.balanceOwed)
+                                val msg = WhatsAppHelper.generateVoucherMessage(voucher, linkedRetailer?.phone, linkedRetailer?.balanceOwed?.toDouble())
                                 if (linkedRetailer != null && linkedRetailer.phone.isNotBlank()) {
                                     WhatsAppHelper.sendWhatsAppMessage(context, linkedRetailer.phone, msg)
                                 } else {
@@ -498,7 +499,7 @@ fun VouchersListSubScreen(
                                     paymentMethod = method,
                                     description = desc
                                 )
-                                val msg = WhatsAppHelper.generateVoucherMessage(tempVoucher, r?.phone, r?.balanceOwed)
+                                val msg = WhatsAppHelper.generateVoucherMessage(tempVoucher, r?.phone, r?.balanceOwed?.toDouble())
                                 if (r != null && r.phone.isNotBlank()) {
                                     WhatsAppHelper.sendWhatsAppMessage(context, r.phone, msg)
                                 } else {
@@ -1122,7 +1123,7 @@ fun VoucherSlipModal(
     val title = if (isVoided) "سند مالي ملغى (VOID)" else if (isReceipt) "سند قبض مالي رسمي" else "سند صرف مالي رسمي"
     val dateStr = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(voucher.dateMillis))
 
-    val shareText = WhatsAppHelper.generateVoucherMessage(voucher, retailer?.phone, retailer?.balanceOwed)
+    val shareText = WhatsAppHelper.generateVoucherMessage(voucher, retailer?.phone, retailer?.balanceOwed?.toDouble())
 
     AlertDialog(
         onDismissRequest = onDismiss,

@@ -173,8 +173,8 @@ class ReportsViewModel(application: Application) : AndroidViewModel(application)
 
         // 8. Top 5 Aging Debtors (أعلى 5 وكلاء مديونية)
         val topDebtorsList = retailers
-            .filter { it.balanceOwed > 0 }
-            .map { Pair(it, it.balanceOwed) }
+            .filter { it.balanceOwedDouble > 0 }
+            .map { Pair(it, it.balanceOwedDouble) }
             .sortedByDescending { it.second }
             .take(5)
 

@@ -11,10 +11,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PurchaseInvoiceDao {
-    @Query("SELECT * FROM purchase_invoices ORDER BY invoiceDateMillis DESC")
+    @Query("SELECT * FROM purchase_invoices WHERE isVoided = 0 ORDER BY invoiceDateMillis DESC")
     fun getAllInvoices(): Flow<List<PurchaseInvoiceEntity>>
 
-    @Query("SELECT * FROM purchase_invoices WHERE targetType = :targetType ORDER BY invoiceDateMillis DESC")
+    @Query("SELECT * FROM purchase_invoices WHERE targetType = :targetType AND isVoided = 0 ORDER BY invoiceDateMillis DESC")
     fun getInvoicesByTargetType(targetType: String): Flow<List<PurchaseInvoiceEntity>>
 
     @Query("SELECT * FROM purchase_invoices WHERE id = :id")
@@ -29,10 +29,10 @@ interface PurchaseInvoiceDao {
     @Delete
     suspend fun deleteInvoice(invoice: PurchaseInvoiceEntity)
 
-    @Query("SELECT SUM(totalAmount) FROM purchase_invoices")
+    @Query("SELECT SUM(CAST(totalAmount AS REAL)) FROM purchase_invoices WHERE isVoided = 0")
     fun getTotalInvoicesAmount(): Flow<Double?>
 
-    @Query("SELECT SUM(totalAmount) FROM purchase_invoices WHERE invoiceDateMillis BETWEEN :startDate AND :endDate")
+    @Query("SELECT SUM(CAST(totalAmount AS REAL)) FROM purchase_invoices WHERE invoiceDateMillis BETWEEN :startDate AND :endDate AND isVoided = 0")
     suspend fun getTotalPurchaseInvoicesAmount(startDate: Long, endDate: Long): Double?
 
     @Query("DELETE FROM purchase_invoices")

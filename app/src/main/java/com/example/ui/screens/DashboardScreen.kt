@@ -146,7 +146,7 @@ fun DashboardScreen(
     var showEmailAuthDialog by remember { mutableStateOf(false) }
     var showFirebaseConfigDialog by remember { mutableStateOf(false) }
 
-    val totalDebt = retailers.sumOf { it.balanceOwed }
+    val totalDebt = retailers.sumOf { it.balanceOwedDouble }
     val onlineDevicesCount = devices.count { it.status == "ONLINE" }
     val receiptsVal = totalReceipts ?: 0.0
     val paymentsVal = totalPayments ?: 0.0

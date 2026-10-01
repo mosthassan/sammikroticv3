@@ -1,140 +1,96 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Assessment
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.Receipt
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.TrendingDown
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.model.IncomeStatementReport
 import com.example.ui.MainViewModel
-import com.example.ui.theme.AssetPurple
-import com.example.ui.theme.EquityBlue
-import com.example.ui.theme.InvestmentGold
-import com.example.ui.theme.MikroTikCyan
-import com.example.ui.theme.MikroTikNavy
-import com.example.ui.theme.MikroTikPrimary
-import com.example.ui.theme.PaymentRed
-import com.example.ui.theme.ProfitEmerald
-import com.example.ui.theme.ReceiptGreen
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.example.ui.theme.*
+import java.math.BigDecimal
+import java.text.DecimalFormat
+import java.util.Calendar
 
+/**
+ * شاشة قائمة الدخل والأرباح المعيارية (Income Statement / P&L)
+ * تقرأ حصرياً ومباشرة من جدول القيود الموزونة (Single Source of Truth):
+ * - الإيرادات (4101 + 4201)
+ * - (-) تكلفة البضاعة المباعة COGS (5101)
+ * - = مجمل الربح (Gross Profit)
+ * - (-) المصروفات التشغيلية والعمومية (5201 + 5202)
+ * - (-) مصروف إهلاك أصول الشبكة (5203)
+ * - = صافي الربح التشغيلي الحقيقي (Net Operating Profit)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfitLossScreen(
     viewModel: MainViewModel,
     onNavigateToAI: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val totalReceipts by viewModel.totalReceipts.collectAsState()
-    val totalPayments by viewModel.totalPayments.collectAsState()
-    val vouchers by viewModel.vouchers.collectAsState()
-    val partners by viewModel.partners.collectAsState()
-    val assets by viewModel.assets.collectAsState()
-    val totalAssetPurchaseCost by viewModel.totalAssetPurchaseCost.collectAsState()
-    val totalCurrentAssetValue by viewModel.totalCurrentAssetValue.collectAsState()
-    val totalInvestedCapital by viewModel.totalInvestedCapital.collectAsState()
-
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val df = remember { DecimalFormat("#,##0.00") }
 
-    val grossRevenue = totalReceipts ?: 0.0
-    val totalOpex = remember(vouchers) {
-        vouchers
-            .filter {
-                it.voucherType == "PAYMENT" &&
-                !it.isVoided &&
-                !it.category.contains("CAPEX", ignoreCase = true) &&
-                !it.category.contains("أصول", ignoreCase = true)
+    // خيارات النطاق الزمني
+    var selectedPeriodIndex by remember { androidx.compose.runtime.mutableIntStateOf(1) } // افتراضياً هذا الشهر
+    val periodOptions = listOf("كامل المدة", "هذا الشهر", "الربع الحالي", "هذا العام")
+
+    val dateRange = remember(selectedPeriodIndex) {
+        val cal = Calendar.getInstance()
+        val now = cal.timeInMillis
+        when (selectedPeriodIndex) {
+            1 -> { // هذا الشهر
+                cal.set(Calendar.DAY_OF_MONTH, 1)
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                Pair(cal.timeInMillis, now)
             }
-            .sumOf { it.amount.toDouble() }
-    }
-    val totalCapexAssets = remember(vouchers, totalAssetPurchaseCost) {
-        val capexVouchersSum = vouchers
-            .filter {
-                it.voucherType == "PAYMENT" &&
-                !it.isVoided &&
-                (it.category.contains("CAPEX", ignoreCase = true) || it.category.contains("أصول", ignoreCase = true))
+            2 -> { // الربع الحالي
+                cal.add(Calendar.MONTH, -3)
+                Pair(cal.timeInMillis, now)
             }
-            .sumOf { it.amount.toDouble() }
-        capexVouchersSum + (totalAssetPurchaseCost ?: 0.0)
+            3 -> { // هذا العام
+                cal.set(Calendar.DAY_OF_YEAR, 1)
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                Pair(cal.timeInMillis, now)
+            }
+            else -> Pair(0L, Long.MAX_VALUE)
+        }
     }
 
-    val netOperatingProfit = grossRevenue - totalOpex
-    val profitMarginPercent = if (grossRevenue > 0) (netOperatingProfit / grossRevenue) * 100.0 else 0.0
+    // جلب تقرير قائمة الدخل من القيود الموزونة
+    val report by viewModel.getIncomeStatementReport(dateRange.first, dateRange.second)
+        .collectAsState(initial = null)
 
-    // Assets & Depreciation
-    val initialAssetCost = totalAssetPurchaseCost ?: 0.0
-    val currentAssetVal = totalCurrentAssetValue ?: 0.0
-    val assetDepreciation = (initialAssetCost - currentAssetVal).coerceAtLeast(0.0)
-
-    // Capital & ROI
-    val investedCapital = totalInvestedCapital ?: 0.0
-    val returnOnInvestmentPercent = if (investedCapital > 0) (netOperatingProfit / investedCapital) * 100.0 else 0.0
-
-    // Expense breakdown by categories
-    val expensesByCategory = remember(vouchers) {
-        vouchers
-            .filter { it.voucherType == "PAYMENT" }
-            .groupBy { if (it.category.isNotBlank()) it.category else "مصاريف تشغيل عامة" }
-            .mapValues { entry -> entry.value.sumOf { it.amount.toDouble() } }
-            .toList()
-            .sortedByDescending { it.second }
-    }
+    var showClosingDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -143,13 +99,98 @@ fun ProfitLossScreen(
             .testTag("profit_loss_screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Hero Card: Executive P&L Summary
+        // بطاقة الرأس والتحكم
         item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "قائمة الدخل والأرباح المعيارية 📈",
+                        fontFamily = CairoFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "مبنية حصرياً على القيود المحاسبية المزدوجة الموزونة",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.5.sp,
+                        color = TextSecondaryDark
+                    )
+                }
+
+                Row {
+                    IconButton(
+                        onClick = {
+                            val r = report ?: return@IconButton
+                            val text = buildString {
+                                appendLine("=== قائمة الدخل المعيارية (P&L) ===")
+                                appendLine("الفترة: ${periodOptions[selectedPeriodIndex]}")
+                                appendLine("1. إيرادات مبيعات الكروت (4101): ${df.format(r.cardSalesRevenue)} ر.ي")
+                                appendLine("2. إيرادات الاشتراكات (4201): ${df.format(r.subscriptionRevenue)} ر.ي")
+                                appendLine("-> إجمالي الإيرادات التشغيلية: ${df.format(r.totalOperationalRevenue)} ر.ي")
+                                appendLine("3. تكلفة البضاعة المباعة COGS (5101): ${df.format(r.cogs)} ر.ي")
+                                appendLine("-> مجمل الربح التشغيلي: ${df.format(r.grossProfit)} ر.ي (${String.format("%.1f", r.grossMarginPercentage)}%)")
+                                appendLine("4. المصروفات التشغيلية (5201 + 5202): ${df.format(r.totalOpexExpenses)} ر.ي")
+                                appendLine("5. قسط إهلاك الأصول (5203): ${df.format(r.depreciationExpense)} ر.ي")
+                                appendLine("---------------------------------------")
+                                appendLine("-> صافي الربح التشغيلي الحقيقي: ${df.format(r.netOperatingProfit)} ر.ي (${String.format("%.1f", r.netProfitMarginPercentage)}%)")
+                            }
+                            clipboardManager.setText(AnnotatedString(text))
+                            Toast.makeText(context, "تم نسخ قائمة الدخل إلى الحافظة ✓", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "مشاركة", tint = MikroTikCyan)
+                    }
+                }
+            }
+        }
+
+        // أزرار اختيار النطاق الزمني
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                periodOptions.forEachIndexed { index, option ->
+                    val isSelected = selectedPeriodIndex == index
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { selectedPeriodIndex = index },
+                        label = {
+                            Text(
+                                text = option,
+                                fontFamily = CairoFontFamily,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MikroTikCyan,
+                            selectedLabelColor = Color.Black,
+                            containerColor = CyberDarkCardElevated,
+                            labelColor = TextSecondaryDark
+                        )
+                    )
+                }
+            }
+        }
+
+        // بطاقة ملخص صافي الربح والنسب المالية الكبرى (Executive KPI Hero)
+        item {
+            val r = report
+            val netProfit = r?.netOperatingProfit ?: BigDecimal.ZERO
+            val isProfit = netProfit >= BigDecimal.ZERO
+
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (netOperatingProfit >= 0) MikroTikNavy else Color(0xFF330A14)
+                    containerColor = if (isProfit) MikroTikNavy else Color(0xFF330A14)
                 ),
+                border = BorderStroke(1.dp, if (isProfit) ProfitEmerald.copy(alpha = 0.5f) else PaymentRed),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -159,65 +200,41 @@ fun ProfitLossScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                text = "قائمة الأرباح والخسائر الشاملة (P&L)",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 17.sp
-                            )
-                            Text(
-                                text = "ميزان الإيرادات التشغيلية، تكاليف الشبكة، وصافي العائد",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 12.sp
-                            )
-                        }
+                        Text(
+                            text = "صافي الربح التشغيلي الحقيقي للفترة",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 12.5.sp,
+                            color = Color(0xFF94A3B8)
+                        )
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (netOperatingProfit >= 0) ProfitEmerald.copy(alpha = 0.2f) else PaymentRed.copy(alpha = 0.2f)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        Surface(
+                            color = if (isProfit) ProfitEmerald.copy(alpha = 0.2f) else PaymentRed.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(6.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (netOperatingProfit >= 0) Icons.Default.TrendingUp else Icons.Default.TrendingDown,
-                                    contentDescription = null,
-                                    tint = if (netOperatingProfit >= 0) ProfitEmerald else PaymentRed,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (netOperatingProfit >= 0) "مشروع رابح" else "عجز مالي",
-                                    color = if (netOperatingProfit >= 0) ProfitEmerald else PaymentRed,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Text(
+                                text = if (isProfit) "ربح صافٍ تشغيلي ✓" else "عجز / خسارة!",
+                                fontFamily = CairoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                                color = if (isProfit) ProfitEmerald else PaymentRed,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                    // Big Number
                     Text(
-                        text = "صافي الربح التشغيلي القابل للتوزيع",
-                        fontSize = 12.sp,
-                        color = Color(0xFF94A3B8)
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${String.format(Locale.US, "%,.0f", netOperatingProfit)} ر.ي",
-                        color = if (netOperatingProfit >= 0) ProfitEmerald else PaymentRed,
+                        text = "${df.format(netProfit)} ر.ي",
+                        fontFamily = CairoFontFamily,
+                        color = if (isProfit) ProfitEmerald else PaymentRed,
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Black
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Ratios Grid
+                    // النسب المالية المعيارية
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -228,12 +245,13 @@ fun ProfitLossScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text("هامش الربح الصافي", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                                Text("هامش مجمل الربح", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF94A3B8))
                                 Text(
-                                    text = "${String.format(Locale.US, "%.1f", profitMarginPercent)}%",
-                                    color = if (profitMarginPercent >= 0) ProfitEmerald else PaymentRed,
+                                    text = "${String.format("%.1f", r?.grossMarginPercentage ?: 0.0)}%",
+                                    fontFamily = CairoFontFamily,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    fontSize = 14.sp,
+                                    color = InvestmentGold
                                 )
                             }
                         }
@@ -244,12 +262,13 @@ fun ProfitLossScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text("العائد على الاستثمار ROI", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                                Text("هامش صافي الربح", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF94A3B8))
                                 Text(
-                                    text = "${String.format(Locale.US, "%.1f", returnOnInvestmentPercent)}%",
-                                    color = InvestmentGold,
+                                    text = "${String.format("%.1f", r?.netProfitMarginPercentage ?: 0.0)}%",
+                                    fontFamily = CairoFontFamily,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    fontSize = 14.sp,
+                                    color = if (isProfit) ProfitEmerald else PaymentRed
                                 )
                             }
                         }
@@ -260,12 +279,13 @@ fun ProfitLossScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text("إهلاك الأصول التقديري", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                                Text("إهلاك الأصول (5203)", fontFamily = CairoFontFamily, fontSize = 10.sp, color = Color(0xFF94A3B8))
                                 Text(
-                                    text = "${String.format(Locale.US, "%,.0f", assetDepreciation)} ر.ي",
-                                    color = Color.White,
+                                    text = "${df.format(r?.depreciationExpense ?: BigDecimal.ZERO)}",
+                                    fontFamily = CairoFontFamily,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
+                                    fontSize = 12.sp,
+                                    color = AssetPurple
                                 )
                             }
                         }
@@ -274,287 +294,364 @@ fun ProfitLossScreen(
             }
         }
 
-        // Section: Inflow vs Outflow Comparison Bar
+        // تفاصيل شجرة قائمة الدخل التفصيلية (Income Statement Waterfall Breakdown)
         item {
+            val r = report
             Card(
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
+                border = BorderStroke(1.dp, CyberBorder),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "التدفق النقدي: المقبوضات مقابل المصروفات",
+                        text = "تفاصيل بنود قائمة الدخل (Income Statement Breakdown):",
+                        fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = Color.White
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
+                    // 1. الإيرادات التشغيلية
+                    IncomeStatementSectionHeader(
+                        title = "1. الإيرادات التشغيلية (Revenues)",
+                        totalAmount = r?.totalOperationalRevenue ?: BigDecimal.ZERO,
+                        df = df,
+                        color = ReceiptGreen
+                    )
+                    IncomeStatementLineItem(
+                        code = "4101",
+                        name = "إيرادات مبيعات كروت الشبكة",
+                        amount = r?.cardSalesRevenue ?: BigDecimal.ZERO,
+                        df = df,
+                        color = ReceiptGreen
+                    )
+                    IncomeStatementLineItem(
+                        code = "4201",
+                        name = "إيرادات الاشتراكات المباشرة والخدمات",
+                        amount = r?.subscriptionRevenue ?: BigDecimal.ZERO,
+                        df = df,
+                        color = ReceiptGreen
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = CyberBorder, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 2. تكلفة البضاعة المباعة (COGS)
+                    IncomeStatementSectionHeader(
+                        title = "2. (-) تكلفة البضاعة المباعة (COGS)",
+                        totalAmount = r?.cogs ?: BigDecimal.ZERO,
+                        df = df,
+                        color = PaymentRed
+                    )
+                    IncomeStatementLineItem(
+                        code = "5101",
+                        name = "تكلفة الكروت المباعة (طباعة، استهلاك حزم، تكلفة الوحدات)",
+                        amount = r?.cogs ?: BigDecimal.ZERO,
+                        df = df,
+                        color = PaymentRed
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = CyberBorder, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 3. مجمل الربح التشغيلي
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(ReceiptGreen))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("إجمالي الإيرادات: ${String.format(Locale.US, "%,.0f", grossRevenue)} ر.ي", fontSize = 12.sp)
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(PaymentRed))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("المصروفات: ${String.format(Locale.US, "%,.0f", totalOpex)} ر.ي", fontSize = 12.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val totalFlow = (grossRevenue + totalOpex).coerceAtLeast(1.0)
-                    LinearProgressIndicator(
-                        progress = { (grossRevenue / totalFlow).toFloat().coerceIn(0f, 1f) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(10.dp)
-                            .clip(RoundedCornerShape(5.dp)),
-                        color = ReceiptGreen,
-                        trackColor = PaymentRed
-                    )
-                }
-            }
-        }
-
-        // Section: Fixed Assets & Company Equity Card (CAPEX)
-        item {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, AssetPurple.copy(alpha = 0.4f)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(AssetPurple.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.AccountBalance, contentDescription = null, tint = AssetPurple, modifier = Modifier.size(20.dp))
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "إجمالي الأصول الثابتة والرأسمالية (CAPEX)",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.5.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "قيمة المعدات والأبراج والأجهزة المملوكة للشبكة (حقوق الملكية)",
-                                fontSize = 10.5.sp,
-                                color = Color(0xFF64748B)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "${String.format(Locale.US, "%,.0f", totalCapexAssets)} ر.ي",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 15.sp,
-                        color = AssetPurple
-                    )
-                }
-            }
-        }
-
-        // Section: Operating Expenses Breakdown (OPEX)
-        item {
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
+                            .background(InvestmentGold.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "تحليل بنود المصروفات التشغيلية (OPEX)",
+                            text = "(=) مجمل الربح التشغيلي (Gross Profit)",
+                            fontFamily = CairoFontFamily,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            fontSize = 13.5.sp,
+                            color = InvestmentGold
                         )
-                        Icon(Icons.Default.PieChart, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "${df.format(r?.grossProfit ?: BigDecimal.ZERO)} ر.ي",
+                            fontFamily = CairoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = InvestmentGold
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    if (expensesByCategory.isEmpty()) {
-                        Text(
-                            text = "لا توجد سندات صرف أو مصروفات مسجلة بعد.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        expensesByCategory.forEach { (catName, amount) ->
-                            val percent = if (totalOpex > 0) (amount / totalOpex) * 100.0 else 0.0
-                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(catName, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                                    Text(
-                                        text = "${String.format(Locale.US, "%,.0f", amount)} ر.ي (${String.format(Locale.US, "%.1f", percent)}%)",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = PaymentRed
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(3.dp))
-                                LinearProgressIndicator(
-                                    progress = { (percent / 100f).toFloat().coerceIn(0f, 1f) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(4.dp)
-                                        .clip(RoundedCornerShape(2.dp)),
-                                    color = PaymentRed,
-                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                    // 4. المصروفات التشغيلية والعمومية
+                    IncomeStatementSectionHeader(
+                        title = "3. (-) المصروفات التشغيلية والصيانة (Opex)",
+                        totalAmount = r?.totalOpexExpenses ?: BigDecimal.ZERO,
+                        df = df,
+                        color = PaymentRed
+                    )
+                    IncomeStatementLineItem(
+                        code = "5201",
+                        name = "مصروفات تشغيلية وعمومية (وقود، ديزل، خطوط نت، إيجارات)",
+                        amount = r?.operatingExpenses ?: BigDecimal.ZERO,
+                        df = df,
+                        color = PaymentRed
+                    )
+                    IncomeStatementLineItem(
+                        code = "5202",
+                        name = "مصروفات صيانة وقطع غيار ومعدات",
+                        amount = r?.maintenanceExpenses ?: BigDecimal.ZERO,
+                        df = df,
+                        color = PaymentRed
+                    )
 
-        // Section: Projected Dividends Distribution to Partners
-        if (partners.isNotEmpty()) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "توزيع صافي الربح التقديري على الشركاء",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = CyberBorder, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 5. قسط إهلاك الأصول الثابتة
+                    IncomeStatementSectionHeader(
+                        title = "4. (-) قسط إهلاك الأصول الثابتة (Depreciation)",
+                        totalAmount = r?.depreciationExpense ?: BigDecimal.ZERO,
+                        df = df,
+                        color = AssetPurple
+                    )
+                    IncomeStatementLineItem(
+                        code = "5203",
+                        name = "مصروف إهلاك أصول الشبكة (سيرفرات، أبراج، طاقة شمسية)",
+                        amount = r?.depreciationExpense ?: BigDecimal.ZERO,
+                        df = df,
+                        color = AssetPurple
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 6. صافي الربح التشغيلي النهائي
+                    val finalNet = r?.netOperatingProfit ?: BigDecimal.ZERO
+                    val finalIsProfit = finalNet >= BigDecimal.ZERO
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (finalIsProfit) ProfitEmerald.copy(alpha = 0.18f) else PaymentRed.copy(alpha = 0.18f),
+                                RoundedCornerShape(10.dp)
                             )
-                            Icon(Icons.Default.Group, contentDescription = null, tint = InvestmentGold, modifier = Modifier.size(18.dp))
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        partners.forEach { p ->
-                            val partnerShare = (netOperatingProfit.coerceAtLeast(0.0) * (p.sharePercentage / 100.0))
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 6.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(EquityBlue.copy(alpha = 0.15f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(p.name.take(1), color = EquityBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(p.name, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        Text("${p.sharePercentage}% حصة ملكية", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-
-                                Text(
-                                    text = "${String.format(Locale.US, "%,.0f", partnerShare)} ر.ي",
-                                    color = ProfitEmerald,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        }
+                            .border(
+                                1.dp,
+                                if (finalIsProfit) ProfitEmerald else PaymentRed,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "(=) صافي الربح التشغيلي الحقيقي (Net Profit)",
+                            fontFamily = CairoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = if (finalIsProfit) ProfitEmerald else PaymentRed
+                        )
+                        Text(
+                            text = "${df.format(finalNet)} ر.ي",
+                            fontFamily = CairoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = if (finalIsProfit) ProfitEmerald else PaymentRed
+                        )
                     }
                 }
             }
         }
 
-        // Action Buttons: Share P&L Statement & AI Financial Advice
+        // أزرار العمليات: استشارة الذكاء الاصطناعي وإقفال الفترة المالية
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        val reportText = """
-                            📊 تقرير الأرباح والخسائر الاستثماري لشبكة الوايرلس:
-                            💰 إجمالي الإيرادات (المقبوضات): ${String.format(Locale.US, "%,.0f", grossRevenue)} ريال
-                            📉 إجمالي المصروفات التشغيلية: ${String.format(Locale.US, "%,.0f", totalOpex)} ريال
-                            🌟 صافي الربح التشغيلي: ${String.format(Locale.US, "%,.0f", netOperatingProfit)} ريال
-                            📈 هامش الربح الصافي: ${String.format(Locale.US, "%.1f", profitMarginPercent)}%
-                            🏗️ إجمالي قيمة الأصول الرأسمالية: ${String.format(Locale.US, "%,.0f", currentAssetVal)} ريال
-                            👥 عدد الشركاء المستثمرين: ${partners.size} شركاء
-                            📅 تم الاستخراج في: ${SimpleDateFormat("yyyy/MM/dd hh:mm a", Locale.US).format(Date())}
-                        """.trimIndent()
-                        val sendIntent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            putExtra(Intent.EXTRA_TEXT, reportText)
-                            type = "text/plain"
-                        }
-                        context.startActivity(Intent.createChooser(sendIntent, "مشاركة قائمة الأرباح والخسائر"))
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("مشاركة التقرير", fontSize = 12.sp)
-                }
-
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        onNavigateToAI(
-                            "قدم لي تحليلاً مالياً ومحاسبياً استثمارياً لشبكتي: إجمالي الإيرادات ${grossRevenue.toInt()} ريال، والمصروفات ${totalOpex.toInt()} ريال، وقيمة الأصول ${currentAssetVal.toInt()} ريال. ما هي أفضل النصائح لتعظيم الأرباح وخفض تكاليف الديزل واشتراك النت للشركاء؟"
-                        )
+                        val r = report
+                        val prompt = if (r != null) {
+                            "أنا مهندس شبكة سلكية ولاسلكية، هذه هي نتائج قائمة الدخل الرسمية للدورة الحالية (${periodOptions[selectedPeriodIndex]}):\n" +
+                            "- إيرادات مبيعات الكروت: ${df.format(r.cardSalesRevenue)} ر.ي\n" +
+                            "- إيرادات الاشتراكات: ${df.format(r.subscriptionRevenue)} ر.ي\n" +
+                            "- إجمالي الإيرادات: ${df.format(r.totalOperationalRevenue)} ر.ي\n" +
+                            "- تكلفة البضاعة المباعة COGS: ${df.format(r.cogs)} ر.ي (الهامش الإجمالي: ${String.format("%.1f", r.grossMarginPercentage)}%)\n" +
+                            "- المصروفات التشغيلية والعمومية: ${df.format(r.operatingExpenses)} ر.ي\n" +
+                            "- مصروفات الصيانة: ${df.format(r.maintenanceExpenses)} ر.ي\n" +
+                            "- إهلاك أصول الشبكة: ${df.format(r.depreciationExpense)} ر.ي\n" +
+                            "- صافي الربح التشغيلي: ${df.format(r.netOperatingProfit)} ر.ي (هامش الصافي: ${String.format("%.1f", r.netProfitMarginPercentage)}%)\n" +
+                            "قدم لي تحليلاً محاسبياً تشغيلياً دقيقاً مع 3 توصيات ذكية لخفض تكلفة الكروت وزيادة أرباح الشركاء."
+                        } else {
+                            "قدم لي تحليلاً محاسبياً لقائمة الدخل وتوصيات لتحسين الأداء المالي للشبكة."
+                        }
+                        onNavigateToAI(prompt)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MikroTikCyan)
                 ) {
-                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("استشارة مالية AI", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("استشارة الذكاء الاصطناعي لتحليل قائمة الدخل 🤖", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, color = Color.Black, fontSize = 13.sp)
+                }
+
+                OutlinedButton(
+                    onClick = { showClosingDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, InvestmentGold),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = InvestmentGold)
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = InvestmentGold, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("إقفال الدورة المالية وتوزيع الأرباح على الشركاء (3201)", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                 }
             }
         }
 
         item {
-            Spacer(modifier = Modifier.height(60.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    // نافذة تأكيد إقفال الدورة المالية وتوزيع الأرباح
+    if (showClosingDialog) {
+        AlertDialog(
+            onDismissRequest = { showClosingDialog = false },
+            title = {
+                Text("إقفال الدورة المالية وتوزيع الأرباح ⚖️", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            },
+            text = {
+                val r = report
+                Column {
+                    Text(
+                        text = "سيتم توليد قيد إقفال معتمد في دفتر اليومية:\n" +
+                               "• إقفال الإيرادات (مدين 4101 و 4201)\n" +
+                               "• إقفال التكاليف والمصروفات (دائن 5101 و 5201 و 5202 و 5203)\n" +
+                               "• ترحيل صافي الربح (${df.format(r?.netOperatingProfit ?: BigDecimal.ZERO)} ر.ي) إلى الحسابات الجارية للشركاء (3201) وفق نسب الحصص مع حفظ رأس المال الأساسي (3101) دون مساس.",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 12.5.sp,
+                        color = TextSecondaryDark
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.executePeriodClosingEntry(
+                            startDateMillis = dateRange.first,
+                            endDateMillis = dateRange.second,
+                            closingPeriodName = periodOptions[selectedPeriodIndex],
+                            performedBy = "المهندس سام"
+                        ) { headerId ->
+                            showClosingDialog = false
+                            if (headerId > 0) {
+                                Toast.makeText(context, "تم إقفال الدورة المالية وترحيل الأرباح بنجاح ✓ (قيد #$headerId)", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "تم تنفيذ الإقفال أو لا توجد حركات للتوزيع", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald)
+                ) {
+                    Text("تأكيد وترحيل الإقفال", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClosingDialog = false }) {
+                    Text("إلغاء", fontFamily = CairoFontFamily, color = TextSecondaryDark)
+                }
+            },
+            containerColor = CyberDarkCardElevated
+        )
+    }
+}
+
+@Composable
+fun IncomeStatementSectionHeader(
+    title: String,
+    totalAmount: BigDecimal,
+    df: DecimalFormat,
+    color: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            fontFamily = CairoFontFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Color.White
+        )
+        Text(
+            text = "${df.format(totalAmount)} ر.ي",
+            fontFamily = CairoFontFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = color
+        )
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+fun IncomeStatementLineItem(
+    code: String,
+    name: String,
+    amount: BigDecimal,
+    df: DecimalFormat,
+    color: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Surface(
+                color = color.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text(
+                    text = code,
+                    fontFamily = CairoFontFamily,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = color,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = name,
+                fontFamily = CairoFontFamily,
+                fontSize = 11.5.sp,
+                color = TextSecondaryDark,
+                maxLines = 1
+            )
+        }
+
+        Text(
+            text = "${df.format(amount)} ر.ي",
+            fontFamily = CairoFontFamily,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color.White
+        )
     }
 }

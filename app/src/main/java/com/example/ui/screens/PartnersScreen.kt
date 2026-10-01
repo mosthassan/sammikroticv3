@@ -340,9 +340,9 @@ fun PartnersScreen(
                                 📊 كشف حصة الشريك في مشروع شبكة الوايرلس:
                                 👤 الشريك: ${partner.name}
                                 📞 الهاتف: ${partner.phone}
-                                💰 رأس المال المستثمر: ${String.format(Locale.US, "%,.0f", partner.capitalInvested)} ريال
+                                💰 رأس المال المستثمر: ${String.format(Locale.US, "%,.0f", partner.capitalInvested.toDouble())} ريال
                                 📈 نسبة الشراكة: ${partner.sharePercentage}%
-                                💵 إجمالي الأرباح المستلمة حتى الآن: ${String.format(Locale.US, "%,.0f", partner.totalWithdrawnProfit)} ريال
+                                💵 إجمالي الأرباح المستلمة حتى الآن: ${String.format(Locale.US, "%,.0f", partner.totalWithdrawnProfit.toDouble())} ريال
                                 🌟 حصة الأرباح المستحقة حالياً: ${String.format(Locale.US, "%,.0f", expectedDividendShare)} ريال
                                 📝 ملاحظات: ${partner.notes.ifBlank { "مشروع استثماري مستقر" }}
                             """.trimIndent()
@@ -561,14 +561,14 @@ fun PartnerCard(
                 Column {
                     Text("رأس المال المدفوع", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        text = "${String.format(Locale.US, "%,.0f", partner.capitalInvested)} ر.ي",
+                        text = "${String.format(Locale.US, "%,.0f", partner.capitalInvested.toDouble())} ر.ي",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (partner.currency.isNotBlank() && partner.currency != "YER" && partner.originalCapital > 0) {
+                    if (partner.currency.isNotBlank() && partner.currency != "YER" && partner.originalCapital > java.math.BigDecimal.ZERO) {
                         Text(
-                            text = CurrencyHelper.formatAmount(partner.originalCapital, partner.currency),
+                            text = CurrencyHelper.formatAmount(partner.originalCapital.toDouble(), partner.currency),
                             fontSize = 10.sp,
                             color = InvestmentGold,
                             fontWeight = FontWeight.Bold
@@ -579,7 +579,7 @@ fun PartnerCard(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("الأرباح المستلمة", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        text = "${String.format(Locale.US, "%,.0f", partner.totalWithdrawnProfit)} ر.ي",
+                        text = "${String.format(Locale.US, "%,.0f", partner.totalWithdrawnProfit.toDouble())} ر.ي",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         color = ProfitEmerald
@@ -733,10 +733,10 @@ fun AddEditPartnerDialog(
     var phone by remember { mutableStateOf(partnerToEdit?.phone ?: "") }
     var selectedCurrency by remember { mutableStateOf(partnerToEdit?.currency?.ifBlank { "YER" } ?: "YER") }
 
-    val initialCapital = if (partnerToEdit != null && partnerToEdit.currency != "YER" && partnerToEdit.originalCapital > 0) {
-        partnerToEdit.originalCapital
+    val initialCapital = if (partnerToEdit != null && partnerToEdit.currency != "YER" && partnerToEdit.originalCapitalDouble > 0) {
+        partnerToEdit.originalCapitalDouble
     } else {
-        partnerToEdit?.capitalInvested ?: 0.0
+        partnerToEdit?.capitalInvestedDouble ?: 0.0
     }
     var capitalText by remember { mutableStateOf(if (initialCapital > 0) initialCapital.toInt().toString() else "") }
     var percentageText by remember { mutableStateOf(partnerToEdit?.sharePercentage?.toString() ?: "") }
@@ -872,17 +872,17 @@ fun AddEditPartnerDialog(
                         val partner = partnerToEdit?.copy(
                             name = name,
                             phone = phone,
-                            capitalInvested = capitalInYer,
+                            capitalInvested = java.math.BigDecimal.valueOf(capitalInYer),
                             currency = selectedCurrency,
-                            originalCapital = originalCapital,
+                            originalCapital = java.math.BigDecimal.valueOf(originalCapital),
                             sharePercentage = percent,
                             notes = notes
                         ) ?: PartnerEntity(
                             name = name,
                             phone = phone,
-                            capitalInvested = capitalInYer,
+                            capitalInvested = java.math.BigDecimal.valueOf(capitalInYer),
                             currency = selectedCurrency,
-                            originalCapital = originalCapital,
+                            originalCapital = java.math.BigDecimal.valueOf(originalCapital),
                             sharePercentage = percent,
                             notes = notes
                         )

@@ -14,13 +14,19 @@ interface NetworkAssetDao {
     @Query("SELECT * FROM network_assets ORDER BY purchaseDateMillis DESC")
     fun getAllAssets(): Flow<List<NetworkAssetEntity>>
 
+    @Query("SELECT * FROM network_assets WHERE status = 'ACTIVE' ORDER BY id ASC")
+    suspend fun getActiveAssetsList(): List<NetworkAssetEntity>
+
+    @Query("SELECT * FROM network_assets ORDER BY id ASC")
+    suspend fun getAllAssetsList(): List<NetworkAssetEntity>
+
     @Query("SELECT * FROM network_assets WHERE category = :category ORDER BY purchaseDateMillis DESC")
     fun getAssetsByCategory(category: String): Flow<List<NetworkAssetEntity>>
 
-    @Query("SELECT SUM(purchaseCost) FROM network_assets")
+    @Query("SELECT SUM(CAST(purchaseCost AS REAL)) FROM network_assets")
     fun getTotalPurchaseCost(): Flow<Double?>
 
-    @Query("SELECT SUM(estimatedCurrentValue) FROM network_assets WHERE status != 'DEPRECATED'")
+    @Query("SELECT SUM(CAST(estimatedCurrentValue AS REAL)) FROM network_assets WHERE status != 'DEPRECATED'")
     fun getTotalCurrentAssetValue(): Flow<Double?>
 
     @Query("SELECT COUNT(*) FROM network_assets")

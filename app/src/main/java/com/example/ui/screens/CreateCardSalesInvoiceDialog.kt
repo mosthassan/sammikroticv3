@@ -36,6 +36,7 @@ import com.example.data.local.entity.InventoryItemEntity
 import com.example.data.local.entity.RetailerEntity
 import com.example.data.model.CardSalesInvoiceItem
 import com.example.ui.theme.*
+import com.example.util.*
 import org.json.JSONArray
 import java.util.UUID
 
@@ -158,8 +159,8 @@ fun CreateCardSalesInvoiceDialog(
         id = UUID.randomUUID().toString(),
         packageName = initialPackage?.packageName ?: "باقة 200 ريال يومية",
         quantity = 50,
-        unitPrice = initialPackage?.wholesalePrice ?: 180.0,
-        retailPrice = initialPackage?.retailPrice ?: 200.0
+        unitPrice = initialPackage?.wholesalePrice?.toDouble() ?: 180.0,
+        retailPrice = initialPackage?.retailPrice?.toDouble() ?: 200.0
     )
 
     var invoiceItems by remember(activeSourceInvoice) {
@@ -692,8 +693,8 @@ fun CreateCardSalesInvoiceDialog(
                                         id = UUID.randomUUID().toString(),
                                         packageName = nextPkg?.packageName ?: "باقة 500 ريال فايبر",
                                         quantity = 20,
-                                        unitPrice = nextPkg?.wholesalePrice ?: 450.0,
-                                        retailPrice = nextPkg?.retailPrice ?: 500.0
+                                        unitPrice = nextPkg?.wholesalePrice?.toDouble() ?: 450.0,
+                                        retailPrice = nextPkg?.retailPrice?.toDouble() ?: 500.0
                                     )
                                     invoiceItems = invoiceItems + newItem
                                 },
@@ -1161,8 +1162,8 @@ private fun InvoiceLineItemCard(
                                 onUpdateItem(
                                     item.copy(
                                         packageName = inv.packageName,
-                                        unitPrice = inv.wholesalePrice,
-                                        retailPrice = inv.retailPrice
+                                        unitPrice = inv.wholesalePrice.toDouble(),
+                                        retailPrice = inv.retailPrice.toDouble()
                                     )
                                 )
                             },

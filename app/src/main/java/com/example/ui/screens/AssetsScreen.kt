@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.widget.Toast
+import java.math.BigDecimal
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -451,8 +452,8 @@ fun AssetsScreen(
                                             🛠 كشف أصل رأسمالي لشبكة الوايرلس:
                                             🏷 الاسم: ${asset.assetName}
                                             🏢 التصنيف: ${asset.category}
-                                            💵 تكلفة الشراء: ${String.format(Locale.US, "%,.0f", asset.purchaseCost)} ريال
-                                            📉 القيمة الدفترية الحالية: ${String.format(Locale.US, "%,.0f", asset.estimatedCurrentValue)} ريال
+                                            💵 تكلفة الشراء: ${String.format(Locale.US, "%,.0f", asset.purchaseCost.toDouble())} ريال
+                                            📉 القيمة الدفترية الحالية: ${String.format(Locale.US, "%,.0f", asset.estimatedCurrentValue.toDouble())} ريال
                                             📍 الموقع: ${asset.location.ifBlank { "غير محدد" }}
                                             🔢 السيريال / الموديل: ${asset.serialNumber.ifBlank { "غير متوفر" }}
                                             ⚡ الحالة: ${if (asset.status == "ACTIVE") "يعمل بكفاءة" else "صيانة / مستهلك"}
@@ -1080,15 +1081,15 @@ fun AssetCard(
                 Column {
                     Text("سعر الشراء", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = CairoFontFamily)
                     Text(
-                        text = "${String.format(Locale.US, "%,.0f", asset.purchaseCost)} ر.ي",
+                        text = "${String.format(Locale.US, "%,.0f", asset.purchaseCost.toDouble())} ر.ي",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = CairoFontFamily
                     )
-                    if (asset.currency.isNotBlank() && asset.currency != "YER" && asset.originalCost > 0) {
+                    if (asset.currency.isNotBlank() && asset.currency != "YER" && asset.originalCost > BigDecimal.ZERO) {
                         Text(
-                            text = CurrencyHelper.formatAmount(asset.originalCost, asset.currency),
+                            text = CurrencyHelper.formatAmount(asset.originalCost.toDouble(), asset.currency),
                             fontSize = 10.sp,
                             color = InvestmentGold,
                             fontWeight = FontWeight.Bold,
@@ -1100,7 +1101,7 @@ fun AssetCard(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("القيمة الحالية (بعد الإهلاك)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = CairoFontFamily)
                     Text(
-                        text = "${String.format(Locale.US, "%,.0f", asset.estimatedCurrentValue)} ر.ي",
+                        text = "${String.format(Locale.US, "%,.0f", asset.estimatedCurrentValue.toDouble())} ر.ي",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         color = ProfitEmerald,
@@ -1169,13 +1170,16 @@ fun AddEditAssetDialog(
     var category by remember(assetToEdit) { mutableStateOf(assetToEdit?.category ?: "SERVERS") }
     var selectedCurrency by remember(assetToEdit) { mutableStateOf(assetToEdit?.currency?.ifBlank { "YER" } ?: "YER") }
 
-    val initialCost = if (assetToEdit != null && assetToEdit.currency != "YER" && assetToEdit.originalCost > 0) {
-        assetToEdit.originalCost
+    val initialCost = if (assetToEdit != null && assetToEdit.currency != "YER" && assetToEdit.originalCostDouble > 0) {
+        assetToEdit.originalCostDouble
     } else {
-        assetToEdit?.purchaseCost ?: 0.0
+        assetToEdit?.purchaseCostDouble ?: 0.0
     }
     var purchaseCostText by remember(assetToEdit) { mutableStateOf(if (initialCost > 0) initialCost.toInt().toString() else "") }
-    var currentValueText by remember(assetToEdit) { mutableStateOf(assetToEdit?.estimatedCurrentValue?.toInt()?.toString() ?: "") }
+    var currentValueText by remember(assetToEdit) {
+        val currVal = assetToEdit?.estimatedCurrentValueDouble ?: 0.0
+        mutableStateOf(if (currVal > 0) currVal.toInt().toString() else "")
+    }
     var location by remember(assetToEdit) { mutableStateOf(assetToEdit?.location ?: "") }
     var serialNumber by remember(assetToEdit) { mutableStateOf(assetToEdit?.serialNumber ?: "") }
     var notes by remember(assetToEdit) { mutableStateOf(assetToEdit?.notes ?: "") }
@@ -1445,20 +1449,20 @@ fun AddEditAssetDialog(
                                 val asset = assetToEdit?.copy(
                                     assetName = name,
                                     category = category,
-                                    purchaseCost = costInYer,
-                                    estimatedCurrentValue = currentVal,
+                                    purchaseCost = java.math.BigDecimal.valueOf(costInYer),
+                                    estimatedCurrentValue = java.math.BigDecimal.valueOf(currentVal),
                                     currency = selectedCurrency,
-                                    originalCost = originalCost,
+                                    originalCost = java.math.BigDecimal.valueOf(originalCost),
                                     location = location,
                                     serialNumber = serialNumber,
                                     notes = notes
                                 ) ?: NetworkAssetEntity(
                                     assetName = name,
                                     category = category,
-                                    purchaseCost = costInYer,
-                                    estimatedCurrentValue = currentVal,
+                                    purchaseCost = java.math.BigDecimal.valueOf(costInYer),
+                                    estimatedCurrentValue = java.math.BigDecimal.valueOf(currentVal),
                                     currency = selectedCurrency,
-                                    originalCost = originalCost,
+                                    originalCost = java.math.BigDecimal.valueOf(originalCost),
                                     location = location,
                                     serialNumber = serialNumber,
                                     notes = notes

@@ -8,6 +8,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.local.converter.BigDecimalConverter
+import com.example.data.local.dao.ChartOfAccountsDao
 import com.example.data.local.dao.CardDao
 import com.example.data.local.dao.CardPackageDao
 import com.example.data.local.dao.CardSalesInvoiceDao
@@ -28,12 +29,15 @@ import com.example.data.local.entity.CardBatchEntity
 import com.example.data.local.entity.CardEntity
 import com.example.data.local.entity.CardPackageEntity
 import com.example.data.local.entity.CardSalesInvoiceEntity
+import com.example.data.local.entity.ChartOfAccountsEntity
 import com.example.data.local.entity.CurrencyRateEntity
 import com.example.data.local.entity.CustomerLedgerEntity
 import com.example.data.local.entity.FinancialVoucherEntity
 import com.example.data.local.entity.InventoryItemEntity
 import com.example.data.local.entity.InventoryMovementEntity
 import com.example.data.local.entity.JournalEntryEntity
+import com.example.data.local.entity.JournalEntryHeaderEntity
+import com.example.data.local.entity.JournalEntryLineEntity
 import com.example.data.local.entity.NetworkAssetEntity
 import com.example.data.local.entity.NetworkDeviceEntity
 import com.example.data.local.entity.NetworkIdentityEntity
@@ -65,10 +69,13 @@ import kotlinx.coroutines.launch
         CardSalesInvoiceEntity::class,
         InventoryMovementEntity::class,
         JournalEntryEntity::class,
+        JournalEntryHeaderEntity::class,
+        JournalEntryLineEntity::class,
+        ChartOfAccountsEntity::class,
         CustomerLedgerEntity::class,
         CurrencyRateEntity::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 @TypeConverters(BigDecimalConverter::class)
@@ -87,12 +94,96 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cardSalesInvoiceDao(): CardSalesInvoiceDao
     abstract fun inventoryMovementDao(): InventoryMovementDao
     abstract fun journalEntryDao(): JournalEntryDao
+    abstract fun chartOfAccountsDao(): ChartOfAccountsDao
     abstract fun customerLedgerDao(): CustomerLedgerDao
     abstract fun currencyRateDao(): CurrencyRateDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Chart of Accounts
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `chart_of_accounts` (
+                        `accountCode` TEXT NOT NULL,
+                        `accountNameAr` TEXT NOT NULL,
+                        `accountNameEn` TEXT NOT NULL,
+                        `accountType` TEXT NOT NULL,
+                        `normalBalance` TEXT NOT NULL,
+                        `parentAccountCode` TEXT,
+                        `isHeader` INTEGER NOT NULL,
+                        `isActive` INTEGER NOT NULL,
+                        `description` TEXT NOT NULL,
+                        PRIMARY KEY(`accountCode`)
+                    )
+                """.trimIndent())
+
+                // 2. Journal Entry Headers
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `journal_entry_headers` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `entryNumber` TEXT NOT NULL,
+                        `dateMillis` INTEGER NOT NULL,
+                        `referenceType` TEXT NOT NULL,
+                        `referenceId` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `totalDebit` TEXT NOT NULL,
+                        `totalCredit` TEXT NOT NULL,
+                        `createdBy` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `voidReason` TEXT,
+                        `reversalOfEntryId` INTEGER
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_journal_entry_headers_entryNumber` ON `journal_entry_headers` (`entryNumber`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_headers_dateMillis` ON `journal_entry_headers` (`dateMillis`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_headers_referenceType_referenceId` ON `journal_entry_headers` (`referenceType`, `referenceId`)")
+
+                // 3. Journal Entry Lines
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `journal_entry_lines` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `headerId` INTEGER NOT NULL,
+                        `accountCode` TEXT NOT NULL,
+                        `accountName` TEXT NOT NULL,
+                        `lineType` TEXT NOT NULL,
+                        `debit` TEXT NOT NULL,
+                        `credit` TEXT NOT NULL,
+                        `currency` TEXT NOT NULL,
+                        `exchangeRate` TEXT NOT NULL,
+                        `originalAmount` TEXT NOT NULL,
+                        `lineDescription` TEXT NOT NULL,
+                        `partyId` INTEGER,
+                        `partyType` TEXT,
+                        FOREIGN KEY(`headerId`) REFERENCES `journal_entry_headers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_lines_headerId` ON `journal_entry_lines` (`headerId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_lines_accountCode` ON `journal_entry_lines` (`accountCode`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_journal_entry_lines_partyType_partyId` ON `journal_entry_lines` (`partyType`, `partyId`)")
+
+                try {
+                    db.execSQL("ALTER TABLE `card_sales_invoices` ADD COLUMN `isVoided` INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE `card_sales_invoices` ADD COLUMN `voidReason` TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) {}
+
+                try {
+                    db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `isVoided` INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE `purchase_invoices` ADD COLUMN `voidReason` TEXT NOT NULL DEFAULT ''")
+                } catch (e: Exception) {}
+
+                try {
+                    db.execSQL("ALTER TABLE `inventory_items` ADD COLUMN `costPrice` TEXT NOT NULL DEFAULT '0'")
+                } catch (e: Exception) {}
+
+                try {
+                    db.execSQL("ALTER TABLE `partners` ADD COLUMN `currentAccountBalance` TEXT NOT NULL DEFAULT '0'")
+                } catch (e: Exception) {}
+            }
+        }
 
         val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -325,7 +416,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sam_mikrotik_db"
                 )
-                    .addMigrations(MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
+                    .addMigrations(MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
                     .fallbackToDestructiveMigration()
                     .addCallback(AppDatabaseCallback())
                     .build()
@@ -343,6 +434,7 @@ abstract class AppDatabase : RoomDatabase() {
                     try {
                         INSTANCE?.let { database ->
                             InitialDataSeeder.seedDatabase(database)
+                            seedChartOfAccountsIfEmpty(database)
                             CustomerLedgerBackfillHelper.backfillIfEmpty(database)
                         }
                     } catch (e: Throwable) {
@@ -356,11 +448,22 @@ abstract class AppDatabase : RoomDatabase() {
                 scope.launch {
                     try {
                         INSTANCE?.let { database ->
+                            seedChartOfAccountsIfEmpty(database)
                             CustomerLedgerBackfillHelper.backfillIfEmpty(database)
                         }
                     } catch (e: Throwable) {
                         android.util.Log.e("AppDatabase", "Error backfilling ledger on open: ${e.message}", e)
                     }
+                }
+            }
+
+            private suspend fun seedChartOfAccountsIfEmpty(database: AppDatabase) {
+                try {
+                    if (database.chartOfAccountsDao().getAccountsCount() == 0) {
+                        database.chartOfAccountsDao().insertAccounts(ChartOfAccountsDao.DEFAULT_STANDARD_CHART)
+                    }
+                } catch (e: Throwable) {
+                    android.util.Log.e("AppDatabase", "Error seeding chart of accounts: ${e.message}", e)
                 }
             }
         }

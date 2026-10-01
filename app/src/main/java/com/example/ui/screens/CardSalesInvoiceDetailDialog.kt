@@ -101,7 +101,7 @@ fun CardSalesInvoiceDetailDialog(
     val linkedRetailer = remember(invoice, retailers) {
         retailers.find { it.id == invoice.retailerId || it.name.trim().equals(invoice.customerName.trim(), ignoreCase = true) }
     }
-    val totalBalanceOwed = linkedRetailer?.balanceOwed ?: invoice.remainingAmount.toDouble()
+    val totalBalanceOwed = linkedRetailer?.balanceOwed?.toDouble() ?: invoice.remainingAmount.toDouble()
 
     // Prepare printable / shareable invoice text
     val invoiceShareText = remember(invoice, items, totalBalanceOwed) {

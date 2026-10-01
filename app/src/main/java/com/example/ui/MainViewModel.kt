@@ -15,10 +15,13 @@ import com.example.data.local.entity.CardBatchEntity
 import com.example.data.local.entity.CardEntity
 import com.example.data.local.entity.CardPackageEntity
 import com.example.data.local.entity.CardSalesInvoiceEntity
+import com.example.data.local.entity.ChartOfAccountsEntity
 import com.example.data.local.entity.FinancialVoucherEntity
 import com.example.data.local.entity.InventoryItemEntity
 import com.example.data.local.entity.InventoryMovementEntity
 import com.example.data.local.entity.JournalEntryEntity
+import com.example.data.local.entity.JournalEntryHeaderEntity
+import com.example.data.local.entity.JournalEntryLineEntity
 import com.example.data.local.entity.NetworkAssetEntity
 import com.example.data.local.entity.NetworkDeviceEntity
 import com.example.data.local.entity.NetworkIdentityEntity
@@ -27,9 +30,16 @@ import com.example.data.local.entity.PartnerTransactionEntity
 import com.example.data.local.entity.PurchaseInvoiceEntity
 import com.example.data.local.entity.RetailerEntity
 import com.example.data.local.entity.UserEntity
+import com.example.data.local.model.JournalEntryWithLines
+import com.example.data.local.model.TrialBalanceRow
+import com.example.data.local.model.GeneralLedgerReport
+import com.example.data.local.model.IncomeStatementReport
+import kotlinx.coroutines.flow.Flow
 import com.example.data.model.CardSalesInvoiceItem
 import com.example.data.model.InvoiceItem
 import com.example.data.model.ParsedInvoiceData
+import com.example.data.model.PeriodClosingSummary
+import com.example.data.model.AssetDepreciationResult
 import com.example.data.repository.NetworkRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -1072,6 +1082,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val totalPayments: StateFlow<Double?> = repository.totalPayments
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
+    // Chart of Accounts & Standard Double-Entry Ledger (شجرة الحسابات المعيارية وميزان المراجعة)
+    val chartOfAccounts: StateFlow<List<ChartOfAccountsEntity>> = repository.allChartOfAccounts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val trialBalance: StateFlow<List<TrialBalanceRow>> = repository.trialBalance
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val journalEntriesWithLines: StateFlow<List<JournalEntryWithLines>> = repository.allJournalEntriesWithLines
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun getPeriodTrialBalance(startDate: Long, endDate: Long): Flow<List<TrialBalanceRow>> {
+        return repository.getPeriodTrialBalance(startDate, endDate)
+    }
+
+    fun getGeneralLedgerReport(accountCode: String, startDate: Long, endDate: Long): Flow<GeneralLedgerReport> {
+        return repository.getGeneralLedgerReport(accountCode, startDate, endDate)
+    }
+
+    fun getIncomeStatementReport(startDate: Long, endDate: Long): Flow<IncomeStatementReport> {
+        return repository.getIncomeStatementReport(startDate, endDate)
+    }
+
+    fun postBalancedJournalEntry(
+        entryNumber: String,
+        referenceType: String,
+        referenceId: String,
+        description: String,
+        lines: List<JournalEntryLineEntity>,
+        onSuccess: (Long) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val createdBy = _currentUser.value?.fullName ?: "المهندس سام"
+                val id = repository.postDoubleEntry(
+                    entryNumber = entryNumber,
+                    referenceType = referenceType,
+                    referenceId = referenceId,
+                    description = description,
+                    lines = lines,
+                    createdBy = createdBy
+                )
+                withContext(Dispatchers.Main) { onSuccess(id) }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onError(e.message ?: "حدث خطأ في حفظ القيد") }
+            }
+        }
+    }
+
+    fun voidJournalEntry(
+        headerId: Long,
+        voidReason: String = "إلغاء القيد المحاسبي",
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val performedBy = _currentUser.value?.fullName ?: "المهندس سام"
+            val reversalId = repository.voidJournalEntry(headerId, voidReason, performedBy)
+            withContext(Dispatchers.Main) { onComplete(reversalId != null) }
+        }
+    }
+
+    fun saveChartOfAccount(
+        account: ChartOfAccountsEntity,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.saveAccount(account)
+            withContext(Dispatchers.Main) { onComplete() }
+        }
+    }
+
     fun createVoucher(
         voucherType: String,
         amount: Double,
@@ -1418,6 +1499,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // =========================================================
+    // محركات العمليات المالية التشغيلية (COGS، الإهلاك، وإقفال الدورة)
+    // =========================================================
+
+    suspend fun calculateFinancialPeriodSummary(startDateMillis: Long, endDateMillis: Long): PeriodClosingSummary {
+        return repository.calculateFinancialPeriodSummary(startDateMillis, endDateMillis)
+    }
+
+    fun executePeriodClosingEntry(
+        startDateMillis: Long,
+        endDateMillis: Long,
+        closingPeriodName: String,
+        performedBy: String = "المهندس سام",
+        onComplete: (Long) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val headerId = repository.executePeriodClosingEntry(
+                    startDateMillis = startDateMillis,
+                    endDateMillis = endDateMillis,
+                    closingPeriodName = closingPeriodName,
+                    performedBy = performedBy
+                )
+                onComplete(headerId)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error executing period closing entry", e)
+                onComplete(-1L)
+            }
+        }
+    }
+
+    fun executeAssetDepreciation(
+        periodMonths: Int = 1,
+        periodName: String = "",
+        performedBy: String = "المهندس سام",
+        onComplete: (AssetDepreciationResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val result = repository.executeAssetDepreciation(
+                    periodMonths = periodMonths,
+                    periodName = periodName,
+                    performedBy = performedBy
+                )
+                onComplete(result)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error executing asset depreciation", e)
+            }
+        }
+    }
+
+    fun calculateAssetMonthlyDepreciation(asset: NetworkAssetEntity): java.math.BigDecimal {
+        return repository.calculateAssetMonthlyDepreciation(asset)
+    }
 
     // AI Consultant State
     private val _aiResponse = MutableStateFlow<String?>(null)

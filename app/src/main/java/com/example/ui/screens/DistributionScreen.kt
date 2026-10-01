@@ -171,9 +171,9 @@ fun DistributionScreen(
 
                 val finalDebt = (debtFromInvoices - independentReceipts).coerceAtLeast(0.0)
                 r.copy(
-                    balanceOwed = finalDebt,
+                    balanceOwed = java.math.BigDecimal.valueOf(finalDebt),
                     activeCardsCount = cardsFromInvoices,
-                    totalPaid = paidFromInvoices + minOf(independentReceipts, debtFromInvoices)
+                    totalPaid = java.math.BigDecimal.valueOf(paidFromInvoices + minOf(independentReceipts, debtFromInvoices))
                 )
             } else {
                 r
@@ -197,7 +197,7 @@ fun DistributionScreen(
         }
     }
 
-    val totalDebt = dynamicRetailers.sumOf { it.balanceOwed }
+    val totalDebt = dynamicRetailers.sumOf { it.balanceOwedDouble }
     val totalActiveCardsWithRetailers = dynamicRetailers.sumOf { it.activeCardsCount }
 
     Box(modifier = modifier.fillMaxSize().testTag("distribution_screen")) {
@@ -567,8 +567,8 @@ fun DistributionScreen(
                                         retailerToEdit = retailer.copy(
                                             id = 0L,
                                             name = "${retailer.name} (فرع جديد)",
-                                            balanceOwed = 0.0,
-                                            totalPaid = 0.0,
+                                            balanceOwed = java.math.BigDecimal.ZERO,
+                                            totalPaid = java.math.BigDecimal.ZERO,
                                             activeCardsCount = 0
                                         )
                                         Toast.makeText(context, "تم استنساخ بيانات البقالة. عدّل التفاصيل ثم احفظ", Toast.LENGTH_SHORT).show()
@@ -669,7 +669,7 @@ fun DistributionScreen(
                             Toast.makeText(context, "تم تسليم $qty كرت للبقالة وقيد المبلغ على الحساب ✓", Toast.LENGTH_LONG).show()
 
                             if (sendWhatsAppNotice && chosenRetailer != null && chosenItem != null && chosenRetailer.phone.isNotBlank()) {
-                                val totalWholesale = chosenItem.wholesalePrice * qty
+                                val totalWholesale = chosenItem.wholesalePrice.toDouble() * qty
                                 val message = WhatsAppHelper.generateCardDeliveryReceiptMessage(
                                     retailer = chosenRetailer,
                                     batchName = chosenItem.packageName,
@@ -981,11 +981,11 @@ fun RetailerCard(
                         color = TextSecondaryDark
                     )
                     Text(
-                        text = "${retailer.balanceOwed.toInt()} ريال",
+                        text = "${retailer.balanceOwed.toDouble().toInt()} ريال",
                         fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
-                        color = if (retailer.balanceOwed > 0) StatusWarning else StatusOnline
+                        color = if (retailer.balanceOwed > java.math.BigDecimal.ZERO) StatusWarning else StatusOnline
                     )
                 }
             }
@@ -1426,7 +1426,7 @@ fun DistributeCardsDialog(
     var isItemExpanded by remember { mutableStateOf(false) }
 
     val qty = quantityText.toIntOrNull() ?: 0
-    val wholesalePrice = selectedItem?.wholesalePrice ?: 0.0
+    val wholesalePrice = selectedItem?.wholesalePrice?.toDouble() ?: 0.0
     val totalAmount = qty * wholesalePrice
 
     AlertDialog(

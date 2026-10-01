@@ -15,17 +15,32 @@ import com.example.data.local.entity.PurchaseInvoiceEntity
 import com.example.data.local.entity.RetailerEntity
 import com.example.data.local.entity.UserEntity
 import com.example.data.local.entity.CardSalesInvoiceEntity
+import com.example.data.local.entity.ChartOfAccountsEntity
 import com.example.data.local.entity.InventoryMovementEntity
 import com.example.data.local.entity.JournalEntryEntity
+import com.example.data.local.entity.JournalEntryHeaderEntity
+import com.example.data.local.entity.JournalEntryLineEntity
+import com.example.data.local.model.JournalEntryWithLines
+import com.example.data.local.model.TrialBalanceRow
+import com.example.data.local.model.GeneralLedgerReport
+import com.example.data.local.model.GeneralLedgerItem
+import com.example.data.local.model.IncomeStatementReport
 import com.example.data.model.CardSalesInvoiceItem
+import com.example.data.model.PeriodClosingSummary
+import com.example.data.model.PartnerPeriodShare
+import com.example.data.model.AssetDepreciationResult
+import com.example.data.model.AssetDepreciationItem
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.room.withTransaction
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
@@ -83,6 +98,595 @@ class NetworkRepository(private val db: AppDatabase) {
         if (cleanIp.isEmpty()) return true
         val prefix = extractSubnetPrefix(subnet)
         return cleanIp.startsWith(prefix)
+    }
+
+    // Chart of Accounts (شجرة الحسابات المحاسبية)
+    val allChartOfAccounts: Flow<List<ChartOfAccountsEntity>> = db.chartOfAccountsDao().getAllAccounts()
+    val activeChartOfAccounts: Flow<List<ChartOfAccountsEntity>> = db.chartOfAccountsDao().getActiveAccounts()
+
+    suspend fun getAccountByCode(code: String): ChartOfAccountsEntity? = withContext(Dispatchers.IO) {
+        db.chartOfAccountsDao().getAccountByCode(code)
+    }
+
+    suspend fun saveAccount(account: ChartOfAccountsEntity) = withContext(Dispatchers.IO) {
+        db.chartOfAccountsDao().insertAccount(account)
+    }
+
+    // Trial Balance & Double-Entry Journal Entries (ميزان المراجعة وقيود اليومية المركبة المزدوجة)
+    val trialBalance: Flow<List<TrialBalanceRow>> = db.journalEntryDao().getTrialBalance()
+    val allJournalEntriesWithLines: Flow<List<JournalEntryWithLines>> = db.journalEntryDao().getAllHeadersWithLines()
+
+    fun getPeriodTrialBalance(startDate: Long, endDate: Long): Flow<List<TrialBalanceRow>> =
+        db.journalEntryDao().getPeriodTrialBalance(startDate, endDate)
+
+    /**
+     * تقرير دفتر الأستاذ العام (General Ledger Report) لحساب معين
+     * مع احتساب الرصيد الافتتاحي والرصيد التراكمي الفعلي بعد كل حركة
+     */
+    fun getGeneralLedgerReport(
+        accountCode: String,
+        startDate: Long,
+        endDate: Long
+    ): Flow<GeneralLedgerReport> = flow {
+        val account = db.chartOfAccountsDao().getAccountByCode(accountCode)
+        val accName = account?.accountNameAr ?: "حساب $accountCode"
+        val accType = account?.accountType ?: "ASSET"
+        val normalBal = account?.normalBalance ?: "DEBIT"
+
+        val opening = db.journalEntryDao().getOpeningDebitCredit(accountCode, startDate)
+        val openDebit = opening?.totalDebit ?: BigDecimal.ZERO
+        val openCredit = opening?.totalCredit ?: BigDecimal.ZERO
+        val openingBalance = if (normalBal == "DEBIT") {
+            openDebit.subtract(openCredit)
+        } else {
+            openCredit.subtract(openDebit)
+        }
+
+        db.journalEntryDao().getLedgerLinesForAccount(accountCode, startDate, endDate).collect { rawLines ->
+            var running = openingBalance
+            var periodDebit = BigDecimal.ZERO
+            var periodCredit = BigDecimal.ZERO
+
+            val computedLines = rawLines.map { line ->
+                periodDebit = periodDebit.add(line.debit)
+                periodCredit = periodCredit.add(line.credit)
+
+                running = if (normalBal == "DEBIT") {
+                    running.add(line.debit).subtract(line.credit)
+                } else {
+                    running.add(line.credit).subtract(line.debit)
+                }
+
+                GeneralLedgerItem(
+                    lineId = line.lineId,
+                    headerId = line.headerId,
+                    entryNumber = line.entryNumber,
+                    dateMillis = line.dateMillis,
+                    accountCode = line.accountCode,
+                    accountName = line.accountName,
+                    description = line.lineDescription.ifBlank { line.headerDescription },
+                    debit = line.debit,
+                    credit = line.credit,
+                    runningBalance = running,
+                    referenceType = line.referenceType,
+                    referenceId = line.referenceId
+                )
+            }
+
+            emit(
+                GeneralLedgerReport(
+                    accountCode = accountCode,
+                    accountName = accName,
+                    accountType = accType,
+                    normalBalance = normalBal,
+                    startDateMillis = startDate,
+                    endDateMillis = endDate,
+                    openingBalance = openingBalance,
+                    totalPeriodDebit = periodDebit,
+                    totalPeriodCredit = periodCredit,
+                    closingBalance = running,
+                    lines = computedLines
+                )
+            )
+        }
+    }
+
+    /**
+     * تقرير قائمة الدخل المعيارية (Income Statement / P&L) المستخرج حصرياً من القيود الموزونة
+     */
+    fun getIncomeStatementReport(
+        startDate: Long,
+        endDate: Long
+    ): Flow<IncomeStatementReport> = db.journalEntryDao().getIncomeStatementRows(startDate, endDate).map { rows ->
+        val rowsMap = rows.associateBy { it.accountCode }
+
+        fun getNetRevenue(code: String): BigDecimal {
+            val r = rowsMap[code] ?: return BigDecimal.ZERO
+            return (r.totalCredit.subtract(r.totalDebit)).max(BigDecimal.ZERO)
+        }
+
+        fun getNetExpense(code: String): BigDecimal {
+            val r = rowsMap[code] ?: return BigDecimal.ZERO
+            return (r.totalDebit.subtract(r.totalCredit)).max(BigDecimal.ZERO)
+        }
+
+        val cardSalesRevenue = getNetRevenue("4101")
+        val subscriptionRevenue = getNetRevenue("4201")
+        val totalRevenue = cardSalesRevenue.add(subscriptionRevenue)
+
+        val cogs = getNetExpense("5101")
+        val grossProfit = totalRevenue.subtract(cogs)
+
+        val operatingExpenses = getNetExpense("5201")
+        val maintenanceExpenses = getNetExpense("5202")
+        val totalOpex = operatingExpenses.add(maintenanceExpenses)
+
+        val depreciation = getNetExpense("5203")
+        val totalExpenses = cogs.add(totalOpex).add(depreciation)
+
+        val netOperatingProfit = totalRevenue.subtract(totalExpenses)
+
+        val grossMargin = if (totalRevenue > BigDecimal.ZERO) {
+            try {
+                grossProfit.multiply(BigDecimal("100")).divide(totalRevenue, 2, RoundingMode.HALF_UP).toDouble()
+            } catch (e: Exception) { 0.0 }
+        } else 0.0
+
+        val netMargin = if (totalRevenue > BigDecimal.ZERO) {
+            try {
+                netOperatingProfit.multiply(BigDecimal("100")).divide(totalRevenue, 2, RoundingMode.HALF_UP).toDouble()
+            } catch (e: Exception) { 0.0 }
+        } else 0.0
+
+        IncomeStatementReport(
+            startDateMillis = startDate,
+            endDateMillis = endDate,
+            cardSalesRevenue = cardSalesRevenue,
+            subscriptionRevenue = subscriptionRevenue,
+            totalOperationalRevenue = totalRevenue,
+            cogs = cogs,
+            grossProfit = grossProfit,
+            operatingExpenses = operatingExpenses,
+            maintenanceExpenses = maintenanceExpenses,
+            totalOpexExpenses = totalOpex,
+            depreciationExpense = depreciation,
+            totalExpenses = totalExpenses,
+            netOperatingProfit = netOperatingProfit,
+            grossMarginPercentage = grossMargin,
+            netProfitMarginPercentage = netMargin
+        )
+    }
+
+    suspend fun postDoubleEntry(
+        entryNumber: String,
+        referenceType: String,
+        referenceId: String,
+        description: String,
+        lines: List<JournalEntryLineEntity>,
+        createdBy: String = "المهندس سام",
+        dateMillis: Long = System.currentTimeMillis()
+    ): Long = withContext(Dispatchers.IO) {
+        val header = JournalEntryHeaderEntity(
+            entryNumber = entryNumber,
+            dateMillis = dateMillis,
+            referenceType = referenceType,
+            referenceId = referenceId,
+            description = description,
+            status = "POSTED",
+            createdBy = createdBy
+        )
+        db.journalEntryDao().postBalancedEntry(header, lines)
+    }
+
+    suspend fun voidJournalEntry(
+        headerId: Long,
+        voidReason: String = "إلغاء القيد المحاسبي",
+        performedBy: String = "المهندس سام"
+    ): Long? = withContext(Dispatchers.IO) {
+        db.journalEntryDao().voidEntryWithReversal(headerId, voidReason, performedBy)
+    }
+
+    // =========================================================================
+    // 2. محرك إهلاك الأصول الثابتة (Asset Depreciation Engine)
+    // =========================================================================
+
+    /**
+     * حساب قسط الإهلاك الشهري بطريقة القسط الثابت (Straight-Line Method)
+     * بناءً على تصنيف الأصل والعمر الإنتاجي المعتمد، مع افتراض قيمة تخريدية (خردة) 5%
+     */
+    fun calculateAssetMonthlyDepreciation(asset: NetworkAssetEntity): BigDecimal {
+        if (asset.purchaseCost <= BigDecimal.ZERO || asset.status == "DEPRECATED") {
+            return BigDecimal.ZERO
+        }
+        val usefulLifeMonths = when (asset.category.uppercase()) {
+            "SERVERS" -> 36        // راوترات ميكروتك وسيرفرات: 3 سنوات
+            "TOWERS" -> 120        // أبراج وهياكل حديدية: 10 سنوات
+            "SOLAR_POWER" -> 48    // طاقة شمسية وبطاريات: 4 سنوات
+            "FIBER_CABLES" -> 60   // كابلات فايبر وهوائية: 5 سنوات
+            "CLIENT_DEVICES" -> 36 // أجهزة بث ومودمات: 3 سنوات
+            else -> 60             // أخرى: 5 سنوات
+        }
+        val salvageValue = asset.purchaseCost.multiply(BigDecimal("0.05"))
+        val depreciableBase = (asset.purchaseCost.subtract(salvageValue)).max(BigDecimal.ZERO)
+        if (depreciableBase <= BigDecimal.ZERO) return BigDecimal.ZERO
+
+        val monthlyDepr = depreciableBase.divide(BigDecimal(usefulLifeMonths), 2, RoundingMode.HALF_UP)
+        // لا يمكن إهلاك الأصل بأكثر من القيمة المتبقية فوق قيمة الخردة
+        val currentBookAboveSalvage = (asset.estimatedCurrentValue.subtract(salvageValue)).max(BigDecimal.ZERO)
+        return monthlyDepr.min(currentBookAboveSalvage)
+    }
+
+    /**
+     * تنفيذ وترحيل قيد إهلاك الأصول الثابتة الدوري (Double-Entry Balanced Depreciation Entry)
+     * مدين: 5203 - مصروف إهلاك أصول الشبكة
+     * دائن: 1509 - مجمع إهلاك الأصول الثابتة
+     */
+    suspend fun executeAssetDepreciation(
+        periodMonths: Int = 1,
+        periodName: String = "",
+        performedBy: String = "المهندس سام"
+    ): AssetDepreciationResult = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            val months = periodMonths.coerceAtLeast(1)
+            val activeAssets = db.networkAssetDao().getActiveAssetsList()
+            var totalDepreciation = BigDecimal.ZERO
+            val processedItems = mutableListOf<AssetDepreciationItem>()
+
+            for (asset in activeAssets) {
+                val monthlyRate = calculateAssetMonthlyDepreciation(asset)
+                val deprAmount = monthlyRate.multiply(BigDecimal(months))
+                if (deprAmount > BigDecimal.ZERO) {
+                    val prevBook = asset.estimatedCurrentValue
+                    val newBook = (prevBook.subtract(deprAmount)).max(BigDecimal.ZERO)
+                    val newStatus = if (newBook <= asset.purchaseCost.multiply(BigDecimal("0.05"))) "DEPRECATED" else asset.status
+
+                    db.networkAssetDao().updateAsset(
+                        asset.copy(
+                            estimatedCurrentValue = newBook,
+                            status = newStatus
+                        )
+                    )
+                    totalDepreciation = totalDepreciation.add(deprAmount)
+                    processedItems.add(
+                        AssetDepreciationItem(
+                            assetId = asset.id,
+                            assetName = asset.assetName,
+                            category = asset.category,
+                            purchaseCost = asset.purchaseCost,
+                            previousBookValue = prevBook,
+                            depreciationAmount = deprAmount,
+                            newBookValue = newBook
+                        )
+                    )
+                }
+            }
+
+            var entryHeaderId = 0L
+            if (totalDepreciation > BigDecimal.ZERO) {
+                val pName = periodName.ifBlank { "دورة $months شهر (${System.currentTimeMillis() % 100000})" }
+                val header = JournalEntryHeaderEntity(
+                    entryNumber = "JE-DEPR-${System.currentTimeMillis() % 100000}",
+                    dateMillis = System.currentTimeMillis(),
+                    referenceType = "ASSET_DEPRECIATION",
+                    referenceId = "DEPR-$months-M",
+                    description = "قيد إهلاك أصول الشبكة الدفتري لدورة $pName",
+                    createdBy = performedBy
+                )
+
+                val lines = listOf(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5203",
+                        accountName = "مصروف إهلاك أصول الشبكة",
+                        lineType = "DEBIT",
+                        debit = totalDepreciation,
+                        lineDescription = "مصروف إهلاك دوري لأصول الشبكة - $pName"
+                    ),
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "1509",
+                        accountName = "مجمع إهلاك الأصول الثابتة",
+                        lineType = "CREDIT",
+                        credit = totalDepreciation,
+                        lineDescription = "مجمع إهلاك الأصول الثابتة المتراكم - $pName"
+                    )
+                )
+
+                entryHeaderId = db.journalEntryDao().postBalancedEntry(header, lines)
+            }
+
+            AssetDepreciationResult(
+                totalDepreciationAmount = totalDepreciation,
+                assetsProcessedCount = processedItems.size,
+                periodMonths = months,
+                entryHeaderId = entryHeaderId,
+                items = processedItems
+            )
+        }
+    }
+
+    // =========================================================================
+    // 3. محرك حقوق الشركاء وإقفال الفترة المالية (Partners & Period Closing Engine)
+    // =========================================================================
+
+    /**
+     * احتساب ملخص الدورة المالية والأرباح التشغيلية الحقيقية للفترة
+     * صافي الربح = الإيرادات (4101 + 4201) - (COGS 5101 + المصروفات 5201 + 5202 + 5203)
+     */
+    suspend fun calculateFinancialPeriodSummary(
+        startDateMillis: Long,
+        endDateMillis: Long
+    ): PeriodClosingSummary = withContext(Dispatchers.IO) {
+        val invoices = db.cardSalesInvoiceDao().getSalesInvoicesList()
+            .filter { !it.isVoided && it.invoiceDateMillis in startDateMillis..endDateMillis }
+        val cardSalesRevenue = invoices.fold(BigDecimal.ZERO) { acc, inv -> acc.add(inv.totalAmount) }
+
+        // إيرادات الاشتراكات المباشرة والخدمات (4201) من السندات
+        val directSubscriptions = db.financialVoucherDao().getVouchersList()
+            .filter { !it.isVoided && it.voucherType == "RECEIPT" && (it.category.contains("اشتراك") || it.category.contains("مباشر")) && it.dateMillis in startDateMillis..endDateMillis }
+            .fold(BigDecimal.ZERO) { acc, v -> acc.add(v.amount) }
+
+        val totalGrossRevenue = cardSalesRevenue.add(directSubscriptions)
+
+        // COGS
+        var totalCogs = BigDecimal.ZERO
+        invoices.forEach { inv ->
+            try {
+                val jsonArray = JSONArray(inv.itemsJson)
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val pkgName = obj.optString("packageName", "")
+                    val qty = obj.optInt("quantity", 0)
+                    val invItem = db.inventoryDao().getItemByPackageName(pkgName)
+                    val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
+                        invItem.costPrice
+                    } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
+                        invItem.wholesalePrice.multiply(BigDecimal("0.5"))
+                    } else {
+                        BigDecimal.valueOf(obj.optDouble("unitPrice", 0.0)).multiply(BigDecimal("0.5"))
+                    }
+                    totalCogs = totalCogs.add(unitCost.multiply(BigDecimal.valueOf(qty.toLong())))
+                }
+            } catch (e: Exception) {
+                totalCogs = totalCogs.add(inv.totalAmount.multiply(BigDecimal("0.5")))
+            }
+        }
+
+        // المصروفات من السندات
+        val vouchers = db.financialVoucherDao().getVouchersList()
+            .filter { !it.isVoided && it.dateMillis in startDateMillis..endDateMillis }
+        val operatingExpenses = vouchers
+            .filter { it.voucherType == "PAYMENT" && !it.category.contains("صيانة") }
+            .fold(BigDecimal.ZERO) { acc, v -> acc.add(v.amount) }
+        val maintenanceExpenses = vouchers
+            .filter { it.voucherType == "PAYMENT" && it.category.contains("صيانة") }
+            .fold(BigDecimal.ZERO) { acc, v -> acc.add(v.amount) }
+
+        // إهلاك الأصول التقديري للفترة
+        val activeAssets = db.networkAssetDao().getActiveAssetsList()
+        val totalDepreciation = activeAssets.fold(BigDecimal.ZERO) { acc, a ->
+            acc.add(calculateAssetMonthlyDepreciation(a))
+        }
+
+        val totalExpenses = totalCogs.add(operatingExpenses).add(maintenanceExpenses).add(totalDepreciation)
+        val netOperatingProfit = (totalGrossRevenue.subtract(totalExpenses)).max(BigDecimal.ZERO)
+
+        val activePartners = db.partnerDao().getActivePartnersList()
+        val totalSharePercentage = activePartners.sumOf { it.sharePercentage }
+        val effectivePercentageBase = if (totalSharePercentage > 0.0) totalSharePercentage else 100.0
+
+        val partnerShares = activePartners.map { partner ->
+            val shareRatio = BigDecimal.valueOf(partner.sharePercentage)
+                .divide(BigDecimal.valueOf(effectivePercentageBase), 6, RoundingMode.HALF_UP)
+            val allocatedProfit = netOperatingProfit.multiply(shareRatio).setScale(2, RoundingMode.HALF_UP)
+            PartnerPeriodShare(
+                partnerId = partner.id,
+                partnerName = partner.name,
+                sharePercentage = partner.sharePercentage,
+                allocatedProfit = allocatedProfit
+            )
+        }
+
+        PeriodClosingSummary(
+            startDateMillis = startDateMillis,
+            endDateMillis = endDateMillis,
+            totalGrossRevenue = totalGrossRevenue,
+            cardSalesRevenue = cardSalesRevenue,
+            directSubscriptionsRevenue = directSubscriptions,
+            totalCogs = totalCogs,
+            totalOperatingExpenses = operatingExpenses,
+            totalMaintenanceExpenses = maintenanceExpenses,
+            totalDepreciation = totalDepreciation,
+            totalExpenses = totalExpenses,
+            netOperatingProfit = netOperatingProfit,
+            partnerShares = partnerShares
+        )
+    }
+
+    /**
+     * تنفيذ قيد إقفال الفترة وتوزيع الأرباح التشغيلية على حسابات جاري الشركاء (3201)
+     * مع بقاء رأس المال الأساسي (3101) مستقلاً تماماً ومحفوظاً دون مساس
+     */
+    suspend fun executePeriodClosingEntry(
+        startDateMillis: Long,
+        endDateMillis: Long,
+        closingPeriodName: String,
+        performedBy: String = "المهندس سام"
+    ): Long = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            val summary = calculateFinancialPeriodSummary(startDateMillis, endDateMillis)
+            if (summary.totalGrossRevenue <= BigDecimal.ZERO && summary.totalExpenses <= BigDecimal.ZERO) {
+                return@withTransaction 0L
+            }
+
+            val pName = closingPeriodName.ifBlank { "دورة مالية (${System.currentTimeMillis() % 100000})" }
+            val lines = mutableListOf<JournalEntryLineEntity>()
+
+            // 1. إقفال الإيرادات (مدين 4101 و 4201)
+            if (summary.cardSalesRevenue > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "4101",
+                        accountName = "إيرادات مبيعات كروت الشبكة",
+                        lineType = "DEBIT",
+                        debit = summary.cardSalesRevenue,
+                        lineDescription = "إقفال إيرادات مبيعات الكروت - $pName"
+                    )
+                )
+            }
+            if (summary.directSubscriptionsRevenue > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "4201",
+                        accountName = "إيرادات الاشتراكات المباشرة",
+                        lineType = "DEBIT",
+                        debit = summary.directSubscriptionsRevenue,
+                        lineDescription = "إقفال إيرادات الاشتراكات المباشرة - $pName"
+                    )
+                )
+            }
+
+            // 2. إقفال التكلفة والمصروفات (دائن 5101, 5201, 5202, 5203)
+            if (summary.totalCogs > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5101",
+                        accountName = "تكلفة الكروت المباعة (COGS)",
+                        lineType = "CREDIT",
+                        credit = summary.totalCogs,
+                        lineDescription = "إقفال تكلفة الكروت المباعة - $pName"
+                    )
+                )
+            }
+            if (summary.totalOperatingExpenses > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5201",
+                        accountName = "مصروفات تشغيلية وعمومية",
+                        lineType = "CREDIT",
+                        credit = summary.totalOperatingExpenses,
+                        lineDescription = "إقفال المصروفات التشغيلية - $pName"
+                    )
+                )
+            }
+            if (summary.totalMaintenanceExpenses > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5202",
+                        accountName = "مصروفات صيانة وقطع غيار",
+                        lineType = "CREDIT",
+                        credit = summary.totalMaintenanceExpenses,
+                        lineDescription = "إقفال مصروفات الصيانة - $pName"
+                    )
+                )
+            }
+            if (summary.totalDepreciation > BigDecimal.ZERO) {
+                lines.add(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5203",
+                        accountName = "مصروف إهلاك أصول الشبكة",
+                        lineType = "CREDIT",
+                        credit = summary.totalDepreciation,
+                        lineDescription = "إقفال قسط إهلاك الأصول - $pName"
+                    )
+                )
+            }
+
+            // 3. توزيع الأرباح الصافية على الحسابات الجارية للشركاء (دائن 3201)
+            val totalDebits = lines.filter { it.lineType == "DEBIT" }.fold(BigDecimal.ZERO) { acc, l -> acc.add(l.debit) }
+            val totalCreditsBeforePartners = lines.filter { it.lineType == "CREDIT" }
+                .fold(BigDecimal.ZERO) { acc, l -> acc.add(l.credit) }
+            val balanceToDistribute = totalDebits.subtract(totalCreditsBeforePartners)
+
+            if (balanceToDistribute > BigDecimal.ZERO && summary.partnerShares.isNotEmpty()) {
+                var runningAllocated = BigDecimal.ZERO
+                summary.partnerShares.forEachIndexed { index, partnerShare ->
+                    val isLast = index == summary.partnerShares.size - 1
+                    val shareAmount = if (isLast) {
+                        (balanceToDistribute.subtract(runningAllocated)).max(BigDecimal.ZERO)
+                    } else {
+                        partnerShare.allocatedProfit.min(balanceToDistribute.subtract(runningAllocated))
+                    }
+                    runningAllocated = runningAllocated.add(shareAmount)
+
+                    if (shareAmount > BigDecimal.ZERO) {
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "3201",
+                                accountName = "جاري الشركاء والمسحوبات / ${partnerShare.partnerName}",
+                                lineType = "CREDIT",
+                                credit = shareAmount,
+                                partyId = partnerShare.partnerId,
+                                partyType = "PARTNER",
+                                lineDescription = "حصة الشريك من صافي أرباح دورة $pName (${partnerShare.sharePercentage}%)"
+                            )
+                        )
+
+                        // تحديث رصيد الحساب الجاري الدائن للشريك دون المساس برأس المال الأساسي
+                        val partner = db.partnerDao().getPartnerById(partnerShare.partnerId)
+                        if (partner != null) {
+                            db.partnerDao().updatePartner(
+                                partner.copy(currentAccountBalance = partner.currentAccountBalance.add(shareAmount))
+                            )
+                        }
+                    }
+                }
+            } else if (balanceToDistribute < BigDecimal.ZERO && summary.partnerShares.isNotEmpty()) {
+                // حالة صافي عجز/خسارة تشغيلية: تُحمل على الحسابات الجارية للشركاء كمدينين
+                val lossToDistribute = balanceToDistribute.abs()
+                var runningLoss = BigDecimal.ZERO
+                summary.partnerShares.forEachIndexed { index, partnerShare ->
+                    val isLast = index == summary.partnerShares.size - 1
+                    val lossAmount = if (isLast) {
+                        (lossToDistribute.subtract(runningLoss)).max(BigDecimal.ZERO)
+                    } else {
+                        lossToDistribute.multiply(BigDecimal.valueOf(partnerShare.sharePercentage))
+                            .divide(BigDecimal("100"), 2, RoundingMode.HALF_UP)
+                    }
+                    runningLoss = runningLoss.add(lossAmount)
+
+                    if (lossAmount > BigDecimal.ZERO) {
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "3201",
+                                accountName = "جاري الشركاء والمسحوبات / ${partnerShare.partnerName}",
+                                lineType = "DEBIT",
+                                debit = lossAmount,
+                                partyId = partnerShare.partnerId,
+                                partyType = "PARTNER",
+                                lineDescription = "تحميل عجز تشغيلي لدورة $pName (${partnerShare.sharePercentage}%)"
+                            )
+                        )
+
+                        val partner = db.partnerDao().getPartnerById(partnerShare.partnerId)
+                        if (partner != null) {
+                            db.partnerDao().updatePartner(
+                                partner.copy(currentAccountBalance = partner.currentAccountBalance.subtract(lossAmount))
+                            )
+                        }
+                    }
+                }
+            }
+
+            val header = JournalEntryHeaderEntity(
+                entryNumber = "JE-CLOSE-${System.currentTimeMillis() % 100000}",
+                dateMillis = System.currentTimeMillis(),
+                referenceType = "PERIOD_CLOSING",
+                referenceId = pName,
+                description = "إقفال الدورة المالية وتوزيع الأرباح على الحسابات الجارية للشركاء: $pName",
+                createdBy = performedBy
+            )
+
+            db.journalEntryDao().postBalancedEntry(header, lines)
+        }
     }
 
     // Devices
@@ -339,8 +943,8 @@ class NetworkRepository(private val db: AppDatabase) {
             db.inventoryDao().updateItem(
                 existingItem.copy(
                     quantityAvailable = updatedQty,
-                    wholesalePrice = wholesalePrice,
-                    retailPrice = retailPrice
+                    wholesalePrice = BigDecimal.valueOf(wholesalePrice),
+                    retailPrice = BigDecimal.valueOf(retailPrice)
                 )
             )
         } else {
@@ -349,8 +953,8 @@ class NetworkRepository(private val db: AppDatabase) {
                 InventoryItemEntity(
                     packageName = categoryName,
                     quantityAvailable = initialQty,
-                    wholesalePrice = wholesalePrice,
-                    retailPrice = retailPrice
+                    wholesalePrice = BigDecimal.valueOf(wholesalePrice),
+                    retailPrice = BigDecimal.valueOf(retailPrice)
                 )
             )
         }
@@ -394,8 +998,8 @@ class NetworkRepository(private val db: AppDatabase) {
     ): Long = withContext(Dispatchers.IO) {
         val count = quantity.coerceAtLeast(1)
         val existingItem = db.inventoryDao().getItemByPackageName(packageName)
-        val finalWholesale = if (wholesalePrice > 0) wholesalePrice else (existingItem?.wholesalePrice ?: 0.0)
-        val finalRetail = if (retailPrice > 0) retailPrice else (existingItem?.retailPrice ?: 0.0)
+        val finalWholesale: BigDecimal = if (wholesalePrice > 0) BigDecimal.valueOf(wholesalePrice) else (existingItem?.wholesalePrice ?: BigDecimal.ZERO)
+        val finalRetail: BigDecimal = if (retailPrice > 0) BigDecimal.valueOf(retailPrice) else (existingItem?.retailPrice ?: BigDecimal.ZERO)
 
         val newBalance = if (existingItem != null) {
             val updatedQty = existingItem.quantityAvailable + count
@@ -605,8 +1209,10 @@ class NetworkRepository(private val db: AppDatabase) {
                 )
             }
 
-            // 2. Stock Deduction & Card Status Update
+            // 2. Stock Deduction, Card Status Update & COGS Calculation
             val timestamp = System.currentTimeMillis()
+            var totalInvoiceCogs = BigDecimal.ZERO
+
             items.forEach { item ->
                 val availableCards = db.cardDao().getAvailableCardsByCategory(item.packageName, item.quantity)
                 if (availableCards.isNotEmpty()) {
@@ -615,6 +1221,16 @@ class NetworkRepository(private val db: AppDatabase) {
                 }
 
                 val existing = db.inventoryDao().getItemByPackageName(item.packageName)
+                val unitCost = if (existing != null && existing.costPrice > BigDecimal.ZERO) {
+                    existing.costPrice
+                } else if (existing != null && existing.wholesalePrice > BigDecimal.ZERO) {
+                    existing.wholesalePrice.multiply(BigDecimal("0.5"))
+                } else {
+                    BigDecimal.valueOf(item.unitPrice).multiply(BigDecimal("0.5"))
+                }
+                val lineCogs = unitCost.multiply(BigDecimal.valueOf(item.quantity.toLong()))
+                totalInvoiceCogs = totalInvoiceCogs.add(lineCogs)
+
                 val newQty = if (existing != null) {
                     val updated = (existing.quantityAvailable - item.quantity).coerceAtLeast(0)
                     db.inventoryDao().updateItem(existing.copy(quantityAvailable = updated))
@@ -661,6 +1277,143 @@ class NetworkRepository(private val db: AppDatabase) {
             // إنشاء وحفظ قيد يومية محاسبي في جدول journal_entries
             val entryNumber = "JE-$invoiceNumber"
             val effectiveCustomer = customerName.ifBlank { "عميل نقدي" }
+
+            // 1. ترحيل قيد مركب متوازن معتمد في نظام القيود المزدوجة (Header & Lines)
+            try {
+                val lines = mutableListOf<JournalEntryLineEntity>()
+                when (finalCanonicalType) {
+                    "CASH" -> {
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "1101",
+                                accountName = "الصندوق الرئيسي (النقدية)",
+                                lineType = "DEBIT",
+                                debit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "متحصلات مبيعات نقداً - فاتورة #$invoiceNumber"
+                            )
+                        )
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "4101",
+                                accountName = "إيرادات مبيعات كروت الشبكة",
+                                lineType = "CREDIT",
+                                credit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($effectiveCustomer)"
+                            )
+                        )
+                    }
+                    "CREDIT" -> {
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "1201",
+                                accountName = "ذمم العملاء والوكلاء (مدينون) / $effectiveCustomer",
+                                lineType = "DEBIT",
+                                debit = totalAmount,
+                                currency = "YER",
+                                partyId = finalRetailerId,
+                                partyType = "RETAILER",
+                                lineDescription = "مديونية مبيعات آجلة - فاتورة #$invoiceNumber"
+                            )
+                        )
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "4101",
+                                accountName = "إيرادات مبيعات كروت الشبكة",
+                                lineType = "CREDIT",
+                                credit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($effectiveCustomer)"
+                            )
+                        )
+                    }
+                    "PARTIAL" -> {
+                        if (finalPaidAmount > BigDecimal.ZERO) {
+                            lines.add(
+                                JournalEntryLineEntity(
+                                    headerId = 0L,
+                                    accountCode = "1101",
+                                    accountName = "الصندوق الرئيسي (النقدية)",
+                                    lineType = "DEBIT",
+                                    debit = finalPaidAmount,
+                                    currency = "YER",
+                                    lineDescription = "دفعة نقدية مسددة - فاتورة #$invoiceNumber"
+                                )
+                            )
+                        }
+                        if (finalRemainingAmount > BigDecimal.ZERO) {
+                            lines.add(
+                                JournalEntryLineEntity(
+                                    headerId = 0L,
+                                    accountCode = "1201",
+                                    accountName = "ذمم العملاء والوكلاء (مدينون) / $effectiveCustomer",
+                                    lineType = "DEBIT",
+                                    debit = finalRemainingAmount,
+                                    currency = "YER",
+                                    partyId = finalRetailerId,
+                                    partyType = "RETAILER",
+                                    lineDescription = "المتبقي الآجل - فاتورة #$invoiceNumber"
+                                )
+                            )
+                        }
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "4101",
+                                accountName = "إيرادات مبيعات كروت الشبكة",
+                                lineType = "CREDIT",
+                                credit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($effectiveCustomer)"
+                            )
+                        )
+                    }
+                    else -> {
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "1101",
+                                accountName = "الصندوق الرئيسي (النقدية)",
+                                lineType = "DEBIT",
+                                debit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "متحصلات مبيعات - فاتورة #$invoiceNumber"
+                            )
+                        )
+                        lines.add(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "4101",
+                                accountName = "إيرادات مبيعات كروت الشبكة",
+                                lineType = "CREDIT",
+                                credit = totalAmount,
+                                currency = "YER",
+                                lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($effectiveCustomer)"
+                            )
+                        )
+                    }
+                }
+
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = entryNumber,
+                        referenceType = "SALES_INVOICE",
+                        referenceId = invoiceId.toString(),
+                        description = "قيد مبيعات كروت فاتورة رقم $invoiceNumber ($effectiveCustomer)",
+                        createdBy = issuerName
+                    ),
+                    lines
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error posting balanced entry for sales invoice: ${e.message}", e)
+            }
+
+            // 2. التوافق مع القيود البسيطة
             when (finalCanonicalType) {
                 "CASH" -> {
                     db.journalEntryDao().insertEntry(
@@ -701,7 +1454,7 @@ class NetworkRepository(private val db: AppDatabase) {
                                 creditAccount = "4101 - إيرادات مبيعات الكروت",
                                 amount = finalPaidAmount,
                                 description = "قيد مبيعات جزء مدفوع نقداً لفاتورة رقم $invoiceNumber ($effectiveCustomer)",
-                                createdBy = issuerName
+                               createdBy = issuerName
                             )
                         )
                     }
@@ -733,6 +1486,46 @@ class NetworkRepository(private val db: AppDatabase) {
                             createdBy = issuerName
                         )
                     )
+                }
+            }
+
+            // 3. محرك تكلفة البضاعة المباعة (COGS Engine): قيد إثبات تكلفة الكروت المباعة ومقابلة المخزون
+            if (totalInvoiceCogs > BigDecimal.ZERO) {
+                try {
+                    val cogsLines = listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "5101",
+                            accountName = "تكلفة الكروت المباعة (COGS)",
+                            lineType = "DEBIT",
+                            debit = totalInvoiceCogs,
+                            currency = "YER",
+                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber ($itemsSummary)"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1301",
+                            accountName = "مخزون كروت الشبكة المطبوعة",
+                            lineType = "CREDIT",
+                            credit = totalInvoiceCogs,
+                            currency = "YER",
+                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
+                        )
+                    )
+
+                    db.journalEntryDao().postBalancedEntry(
+                        JournalEntryHeaderEntity(
+                            entryNumber = "JE-COGS-$invoiceNumber",
+                            dateMillis = System.currentTimeMillis(),
+                            referenceType = "COGS",
+                            referenceId = invoiceId.toString(),
+                            description = "تكلفة البضاعة المباعة (COGS) ومقابلة المخزون - فاتورة #$invoiceNumber",
+                            createdBy = issuerName
+                        ),
+                        cogsLines
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("NetworkRepository", "Error posting COGS entry for sales invoice: ${e.message}", e)
                 }
             }
 
@@ -1259,9 +2052,9 @@ class NetworkRepository(private val db: AppDatabase) {
 
                 db.retailerDao().updateRetailer(
                     retailer.copy(
-                        balanceOwed = accountSummary.finalBalance.toDouble(),
+                        balanceOwed = accountSummary.finalBalance,
                         activeCardsCount = finalActiveCards,
-                        totalPaid = accountSummary.totalPaid.toDouble()
+                        totalPaid = accountSummary.totalPaid
                     )
                 )
             }
@@ -1428,8 +2221,31 @@ class NetworkRepository(private val db: AppDatabase) {
                     }
                 }
 
-                // 4. حذف الفاتورة والسجل الدفتري
-                db.cardSalesInvoiceDao().deleteInvoice(invoice)
+                // 4. تحديث حالة الفاتورة لتصبح ملغاة رسمياً مع قيد تسوية للمديونية لحفظ مسار التدقيق (Audit Trail)
+                try {
+                    val header = db.journalEntryDao().getHeaderByReference("SALES_INVOICE", invoice.id.toString())
+                    if (header != null) {
+                        db.journalEntryDao().voidEntryWithReversal(header.id, "إلغاء الفاتورة وتسوية مسار التدقيق", invoice.issuerName.ifBlank { "المهندس حسن" })
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("NetworkRepository", "Error voiding header for sales invoice: ${e.message}", e)
+                }
+
+                try {
+                    val cogsHeader = db.journalEntryDao().getHeaderByReference("COGS", invoice.id.toString())
+                    if (cogsHeader != null) {
+                        db.journalEntryDao().voidEntryWithReversal(cogsHeader.id, "إلغاء تكلفة مبيعات الفاتورة وتسوية المخزون", invoice.issuerName.ifBlank { "المهندس حسن" })
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("NetworkRepository", "Error voiding COGS header for sales invoice: ${e.message}", e)
+                }
+
+                val voidedInvoice = invoice.copy(
+                    isVoided = true,
+                    status = "VOIDED",
+                    voidReason = "إلغاء الفاتورة وتسوية مسار التدقيق"
+                )
+                db.cardSalesInvoiceDao().updateInvoice(voidedInvoice)
                 db.customerLedgerDao().deleteByReferenceId(invoice.id.toString())
                 db.customerLedgerDao().deleteByReferenceId("INV_PAY_${invoice.id}")
                 if (invoice.invoiceNumber.isNotBlank()) {
@@ -1440,7 +2256,8 @@ class NetworkRepository(private val db: AppDatabase) {
                 reconcileAccountingLedgerInternal()
             } catch (e: Exception) {
                 android.util.Log.e("NetworkRepository", "deleteSalesInvoice error: ${e.message}", e)
-                db.cardSalesInvoiceDao().deleteInvoice(invoice)
+                val voidedInvoice = invoice.copy(isVoided = true, status = "VOIDED", voidReason = "إلغاء الفاتورة")
+                db.cardSalesInvoiceDao().updateInvoice(voidedInvoice)
                 db.customerLedgerDao().deleteByReferenceId(invoice.id.toString())
                 db.customerLedgerDao().deleteByReferenceId("INV_PAY_${invoice.id}")
                 reconcileAccountingLedgerInternal()
@@ -1462,7 +2279,7 @@ class NetworkRepository(private val db: AppDatabase) {
             val updatedItem = item.copy(quantityAvailable = item.quantityAvailable - quantity)
             db.inventoryDao().updateItem(updatedItem)
 
-            val totalDebt = item.wholesalePrice * quantity
+            val totalDebt = item.wholesalePrice.multiply(BigDecimal.valueOf(quantity.toLong()))
             val invoiceNumber = "INV-2026-${Random.nextInt(1000, 9999)}"
 
             // قيد حركة مخزنية خارجة (خصم تسليم كروت)
@@ -1485,9 +2302,9 @@ class NetworkRepository(private val db: AppDatabase) {
                     put("id", java.util.UUID.randomUUID().toString())
                     put("packageName", item.packageName)
                     put("quantity", quantity)
-                    put("unitPrice", item.wholesalePrice)
-                    put("retailPrice", item.retailPrice)
-                    put("lineTotal", totalDebt)
+                    put("unitPrice", item.wholesalePrice.toDouble())
+                    put("retailPrice", item.retailPrice.toDouble())
+                    put("lineTotal", totalDebt.toDouble())
                 })
             }
 
@@ -1497,9 +2314,9 @@ class NetworkRepository(private val db: AppDatabase) {
                 customerPhone = retailer.phone,
                 retailerId = retailerId,
                 paymentType = "CREDIT",
-                totalAmount = BigDecimal.valueOf(totalDebt),
+                totalAmount = totalDebt,
                 paidAmount = BigDecimal.ZERO,
-                remainingAmount = BigDecimal.valueOf(totalDebt),
+                remainingAmount = totalDebt,
                 totalCardsCount = quantity,
                 itemsCount = 1,
                 itemsSummary = "$quantity كرت [${item.packageName}]",
@@ -1508,7 +2325,89 @@ class NetworkRepository(private val db: AppDatabase) {
                 issuerName = "مسؤول التوزيع",
                 status = "CREDIT"
             )
-            db.cardSalesInvoiceDao().insertInvoice(invoiceEntity)
+            val invoiceId = db.cardSalesInvoiceDao().insertInvoice(invoiceEntity)
+
+            // 1. قيد إثبات المبيعات الآجلة للوكيل
+            try {
+                val salesLines = listOf(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "1201",
+                        accountName = "ذمم العملاء والوكلاء (مدينون) / ${retailer.name}",
+                        lineType = "DEBIT",
+                        debit = totalDebt,
+                        currency = "YER",
+                        partyId = retailerId,
+                        partyType = "RETAILER",
+                        lineDescription = "مديونية تسليم كروت بالآجل - فاتورة #$invoiceNumber"
+                    ),
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "4101",
+                        accountName = "إيرادات مبيعات كروت الشبكة",
+                        lineType = "CREDIT",
+                        credit = totalDebt,
+                        currency = "YER",
+                        lineDescription = "إيراد مبيعات تسليم كروت للبقالة #$invoiceNumber"
+                    )
+                )
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = "JE-$invoiceNumber",
+                        dateMillis = System.currentTimeMillis(),
+                        referenceType = "SALES_INVOICE",
+                        referenceId = invoiceId.toString(),
+                        description = "قيد مبيعات تسليم كروت بالآجل للبقالة ${retailer.name} - فاتورة #$invoiceNumber",
+                        createdBy = "مسؤول التوزيع"
+                    ),
+                    salesLines
+                )
+
+                // 2. قيد تكلفة البضاعة المباعة (COGS) ومقابلة المخزون
+                val unitCost = if (item.costPrice > BigDecimal.ZERO) {
+                    item.costPrice
+                } else if (item.wholesalePrice > BigDecimal.ZERO) {
+                    item.wholesalePrice.multiply(BigDecimal("0.5"))
+                } else {
+                    item.retailPrice.multiply(BigDecimal("0.5"))
+                }
+                val totalCogs = unitCost.multiply(BigDecimal.valueOf(quantity.toLong()))
+                if (totalCogs > BigDecimal.ZERO) {
+                    val cogsLines = listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "5101",
+                            accountName = "تكلفة الكروت المباعة (COGS)",
+                            lineType = "DEBIT",
+                            debit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1301",
+                            accountName = "مخزون كروت الشبكة المطبوعة",
+                            lineType = "CREDIT",
+                            credit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
+                        )
+                    )
+                    db.journalEntryDao().postBalancedEntry(
+                        JournalEntryHeaderEntity(
+                            entryNumber = "JE-COGS-$invoiceNumber",
+                            dateMillis = System.currentTimeMillis(),
+                            referenceType = "COGS",
+                            referenceId = invoiceId.toString(),
+                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
+                            createdBy = "مسؤول التوزيع"
+                        ),
+                        cogsLines
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error posting balanced entries for inventory distribution: ${e.message}", e)
+            }
 
             // إعادة التسوية الشاملة ذرياً
             reconcileAccountingLedgerInternal()
@@ -1535,6 +2434,7 @@ class NetworkRepository(private val db: AppDatabase) {
             db.cardDao().assignCardsToRetailer(cardIds, retailerId, retailer.name, now)
 
             val totalWholesaleDebt = availableCards.sumOf { it.wholesalePrice }
+            val totalWholesaleDebtBd = BigDecimal.valueOf(totalWholesaleDebt)
             val categoryName = availableCards.firstOrNull()?.categoryName ?: "كروت شبكة"
             val invoiceNumber = "INV-2026-${Random.nextInt(1000, 9999)}"
 
@@ -1555,9 +2455,9 @@ class NetworkRepository(private val db: AppDatabase) {
                 customerPhone = retailer.phone,
                 retailerId = retailerId,
                 paymentType = "CREDIT",
-                totalAmount = BigDecimal.valueOf(totalWholesaleDebt),
+                totalAmount = totalWholesaleDebtBd,
                 paidAmount = BigDecimal.ZERO,
-                remainingAmount = BigDecimal.valueOf(totalWholesaleDebt),
+                remainingAmount = totalWholesaleDebtBd,
                 totalCardsCount = countToDistribute,
                 itemsCount = 1,
                 itemsSummary = "$countToDistribute كرت [$categoryName]",
@@ -1566,7 +2466,90 @@ class NetworkRepository(private val db: AppDatabase) {
                 issuerName = "مسؤول التوزيع",
                 status = "CREDIT"
             )
-            db.cardSalesInvoiceDao().insertInvoice(invoiceEntity)
+            val invoiceId = db.cardSalesInvoiceDao().insertInvoice(invoiceEntity)
+
+            // 1. قيد إثبات المبيعات الآجلة للوكيل
+            try {
+                val salesLines = listOf(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "1201",
+                        accountName = "ذمم العملاء والوكلاء (مدينون) / ${retailer.name}",
+                        lineType = "DEBIT",
+                        debit = totalWholesaleDebtBd,
+                        currency = "YER",
+                        partyId = retailerId,
+                        partyType = "RETAILER",
+                        lineDescription = "مديونية تسليم كروت بالآجل - فاتورة #$invoiceNumber"
+                    ),
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "4101",
+                        accountName = "إيرادات مبيعات كروت الشبكة",
+                        lineType = "CREDIT",
+                        credit = totalWholesaleDebtBd,
+                        currency = "YER",
+                        lineDescription = "إيراد مبيعات تسليم كروت للبقالة #$invoiceNumber"
+                    )
+                )
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = "JE-$invoiceNumber",
+                        dateMillis = System.currentTimeMillis(),
+                        referenceType = "SALES_INVOICE",
+                        referenceId = invoiceId.toString(),
+                        description = "قيد مبيعات تسليم كروت بالآجل للبقالة ${retailer.name} - فاتورة #$invoiceNumber",
+                        createdBy = "مسؤول التوزيع"
+                    ),
+                    salesLines
+                )
+
+                // 2. قيد تكلفة البضاعة المباعة (COGS)
+                val invItem = db.inventoryDao().getItemByPackageName(categoryName)
+                val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
+                    invItem.costPrice
+                } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
+                    invItem.wholesalePrice.multiply(BigDecimal("0.5"))
+                } else {
+                    totalWholesaleDebtBd.divide(BigDecimal.valueOf(countToDistribute.toLong()), 2, RoundingMode.HALF_UP).multiply(BigDecimal("0.5"))
+                }
+                val totalCogs = unitCost.multiply(BigDecimal.valueOf(countToDistribute.toLong()))
+                if (totalCogs > BigDecimal.ZERO) {
+                    val cogsLines = listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "5101",
+                            accountName = "تكلفة الكروت المباعة (COGS)",
+                            lineType = "DEBIT",
+                            debit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1301",
+                            accountName = "مخزون كروت الشبكة المطبوعة",
+                            lineType = "CREDIT",
+                            credit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
+                        )
+                    )
+                    db.journalEntryDao().postBalancedEntry(
+                        JournalEntryHeaderEntity(
+                            entryNumber = "JE-COGS-$invoiceNumber",
+                            dateMillis = System.currentTimeMillis(),
+                            referenceType = "COGS",
+                            referenceId = invoiceId.toString(),
+                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
+                            createdBy = "مسؤول التوزيع"
+                        ),
+                        cogsLines
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error posting balanced entries for batch distribution: ${e.message}", e)
+            }
 
             reconcileAccountingLedgerInternal()
 
@@ -1635,6 +2618,112 @@ class NetworkRepository(private val db: AppDatabase) {
                 status = if (isCash) "PAID" else "CREDIT"
             )
             val invoiceId = db.cardSalesInvoiceDao().insertInvoice(invoiceEntity)
+
+            // 1. قيد إثبات المبيعات المتوازن
+            try {
+                val salesLines = if (isCash) {
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1101",
+                            accountName = "الصندوق الرئيسي (النقدية)",
+                            lineType = "DEBIT",
+                            debit = totalWholesale,
+                            currency = "YER",
+                            lineDescription = "متحصلات مبيعات كروت نقداً - فاتورة #$invoiceNumber ($retailerName)"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "4101",
+                            accountName = "إيرادات مبيعات كروت الشبكة",
+                            lineType = "CREDIT",
+                            credit = totalWholesale,
+                            currency = "YER",
+                            lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($retailerName)"
+                        )
+                    )
+                } else {
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1201",
+                            accountName = "ذمم العملاء والوكلاء (مدينون) / $retailerName",
+                            lineType = "DEBIT",
+                            debit = totalWholesale,
+                            currency = "YER",
+                            partyId = retailerId,
+                            partyType = "RETAILER",
+                            lineDescription = "مديونية مبيعات كروت بالآجل - فاتورة #$invoiceNumber"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "4101",
+                            accountName = "إيرادات مبيعات كروت الشبكة",
+                            lineType = "CREDIT",
+                            credit = totalWholesale,
+                            currency = "YER",
+                            lineDescription = "إيراد مبيعات كروت فاتورة #$invoiceNumber ($retailerName)"
+                        )
+                    )
+                }
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = "JE-$invoiceNumber",
+                        dateMillis = System.currentTimeMillis(),
+                        referenceType = "SALES_INVOICE",
+                        referenceId = invoiceId.toString(),
+                        description = "قيد مبيعات كروت - فاتورة #$invoiceNumber ($retailerName)",
+                        createdBy = issuerName
+                    ),
+                    salesLines
+                )
+
+                // 2. قيد تكلفة البضاعة المباعة (COGS Engine) ومقابلة المخزون
+                val invItem = db.inventoryDao().getItemByPackageName(packageEntity.name)
+                val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
+                    invItem.costPrice
+                } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
+                    invItem.wholesalePrice.multiply(BigDecimal("0.5"))
+                } else {
+                    packageEntity.wholesalePrice.multiply(BigDecimal("0.5"))
+                }
+                val totalCogs = unitCost.multiply(BigDecimal.valueOf(quantity.toLong()))
+                if (totalCogs > BigDecimal.ZERO) {
+                    val cogsLines = listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "5101",
+                            accountName = "تكلفة الكروت المباعة (COGS)",
+                            lineType = "DEBIT",
+                            debit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1301",
+                            accountName = "مخزون كروت الشبكة المطبوعة",
+                            lineType = "CREDIT",
+                            credit = totalCogs,
+                            currency = "YER",
+                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
+                        )
+                    )
+                    db.journalEntryDao().postBalancedEntry(
+                        JournalEntryHeaderEntity(
+                            entryNumber = "JE-COGS-$invoiceNumber",
+                            dateMillis = System.currentTimeMillis(),
+                            referenceType = "COGS",
+                            referenceId = invoiceId.toString(),
+                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
+                            createdBy = issuerName
+                        ),
+                        cogsLines
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error posting balanced entries for issueCardSalesInvoice: ${e.message}", e)
+            }
 
             val descriptionText = buildString {
                 append("فاتورة بيع $quantity كرت [${packageEntity.name}]")
@@ -1737,6 +2826,67 @@ class NetworkRepository(private val db: AppDatabase) {
 
             // إنشاء وحفظ قيد محاسبي مزدوج تلقائي إذا لم يكن السند مرتبطاً بفاتورة مسبقاً
             if (invoiceId == null && invoiceNumber.isBlank()) {
+                try {
+                    val lines = if (voucherType == "RECEIPT") {
+                        listOf(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "1101",
+                                accountName = "الصندوق الرئيسي (النقدية)",
+                                lineType = "DEBIT",
+                                debit = amount,
+                                currency = voucher.currency,
+                                lineDescription = description
+                            ),
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = if (retailerId != null) "1201" else "4101",
+                                accountName = if (retailerId != null) "ذمم العملاء والوكلاء / $partyName" else "إيرادات عامة",
+                                lineType = "CREDIT",
+                                credit = amount,
+                                currency = voucher.currency,
+                                partyId = retailerId,
+                                partyType = if (retailerId != null) "RETAILER" else null,
+                                lineDescription = description
+                            )
+                        )
+                    } else {
+                        listOf(
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "5201",
+                                accountName = "مصروفات تشغيلية وعمومية / $category",
+                                lineType = "DEBIT",
+                                debit = amount,
+                                currency = voucher.currency,
+                                lineDescription = description
+                            ),
+                            JournalEntryLineEntity(
+                                headerId = 0L,
+                                accountCode = "1101",
+                                accountName = "الصندوق الرئيسي (النقدية)",
+                                lineType = "CREDIT",
+                                credit = amount,
+                                currency = voucher.currency,
+                                lineDescription = description
+                            )
+                        )
+                    }
+
+                    db.journalEntryDao().postBalancedEntry(
+                        JournalEntryHeaderEntity(
+                            entryNumber = "JE-$voucherNumberGenerated",
+                            referenceType = "FINANCIAL_VOUCHER",
+                            referenceId = voucherNumberGenerated,
+                            description = description,
+                            createdBy = issuerName
+                        ),
+                        lines
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("NetworkRepository", "Error posting balanced entry for voucher: ${e.message}", e)
+                }
+
                 val (debitAcc, creditAcc) = if (voucherType == "RECEIPT") {
                     val credit = if (retailerId != null) "1201 - ذمم الوكلاء / $partyName" else "4101 - إيرادات عامة"
                     "1101 - الصندوق الرئيسي" to credit
@@ -1767,14 +2917,7 @@ class NetworkRepository(private val db: AppDatabase) {
     }
 
     suspend fun deleteVoucher(voucher: FinancialVoucherEntity) = withContext(Dispatchers.IO) {
-        db.withTransaction {
-            db.financialVoucherDao().deleteVoucher(voucher)
-            db.customerLedgerDao().deleteByReferenceId(voucher.id.toString())
-            if (voucher.voucherNumber.isNotBlank()) {
-                db.customerLedgerDao().deleteByReferenceId(voucher.voucherNumber)
-            }
-            reconcileAccountingLedgerInternal()
-        }
+        voidVoucher(voucher, "إلغاء السند المالي وتسوية مسار التدقيق")
     }
 
     suspend fun updateVoucher(voucher: FinancialVoucherEntity) = withContext(Dispatchers.IO) {
@@ -1795,6 +2938,15 @@ class NetworkRepository(private val db: AppDatabase) {
             }
 
             // 2. إنشاء قيد يومية عكسي تلقائي (Reversal Journal Entry) لإلغاء الأثر المالي للسند
+            try {
+                val header = db.journalEntryDao().getHeaderByReference("FINANCIAL_VOUCHER", voucher.voucherNumber)
+                if (header != null) {
+                    db.journalEntryDao().voidEntryWithReversal(header.id, reason, voucher.issuerName)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error voiding header for voucher: ${e.message}", e)
+            }
+
             val (origDebit, origCredit) = if (voucher.voucherType == "RECEIPT") {
                 val credit = if (voucher.retailerId != null) "1201 - ذمم الوكلاء / ${voucher.partyName}" else "4101 - إيرادات عامة"
                 "1101 - الصندوق الرئيسي" to credit
@@ -2127,11 +3279,44 @@ class NetworkRepository(private val db: AppDatabase) {
                 partner.id
             }
 
-            if (isNew && partner.capitalInvested > 0) {
-                val amount = BigDecimal.valueOf(partner.capitalInvested)
+            if (isNew && partner.capitalInvested > BigDecimal.ZERO) {
+                val amount = partner.capitalInvested
+                val entryNumber = "JE-PARTNER-${pId}-${System.currentTimeMillis() % 100000}"
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = entryNumber,
+                        referenceType = "PARTNER_CAPITAL",
+                        referenceId = pId.toString(),
+                        description = "إيداع رأس مال مبدئي للشريك ${partner.name}",
+                        createdBy = "المهندس سام"
+                    ),
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1101",
+                            accountName = "الصندوق الرئيسي (النقدية)",
+                            lineType = "DEBIT",
+                            debit = amount,
+                            currency = partner.currency.ifBlank { "YER" },
+                            partyId = pId,
+                            partyType = "PARTNER"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "3101",
+                            accountName = "رأس مال الشركاء الأساسي / ${partner.name}",
+                            lineType = "CREDIT",
+                            credit = amount,
+                            currency = partner.currency.ifBlank { "YER" },
+                            partyId = pId,
+                            partyType = "PARTNER"
+                        )
+                    )
+                )
+
                 db.journalEntryDao().insertEntry(
                     JournalEntryEntity(
-                        entryNumber = "JE-PARTNER-${pId}-${System.currentTimeMillis() % 100000}",
+                        entryNumber = entryNumber,
                         referenceType = "PARTNER_CAPITAL",
                         referenceId = pId.toString(),
                         debitAccount = "1101 - الصندوق الرئيسي",
@@ -2160,12 +3345,48 @@ class NetworkRepository(private val db: AppDatabase) {
             if (tx.transactionType == "DIVIDEND_PAYOUT" || tx.transactionType == "DRAWING") {
                 if (partner != null) {
                     db.partnerDao().updatePartner(
-                        partner.copy(totalWithdrawnProfit = partner.totalWithdrawnProfit + tx.amount.toDouble())
+                        partner.copy(
+                            totalWithdrawnProfit = partner.totalWithdrawnProfit.add(tx.amount),
+                            currentAccountBalance = partner.currentAccountBalance.subtract(tx.amount)
+                        )
                     )
                 }
+                val entryNumber = "JE-DIV-${txId}-${System.currentTimeMillis() % 100000}"
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = entryNumber,
+                        referenceType = "PARTNER_DIVIDEND",
+                        referenceId = txId.toString(),
+                        description = "توزيع أرباح / مسحوبات للشريك ${tx.partnerName}",
+                        createdBy = "المهندس سام"
+                    ),
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "3201",
+                            accountName = "جاري الشركاء والمسحوبات / ${tx.partnerName}",
+                            lineType = "DEBIT",
+                            debit = tx.amount,
+                            currency = tx.currency,
+                            partyId = tx.partnerId,
+                            partyType = "PARTNER"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1101",
+                            accountName = "الصندوق الرئيسي (النقدية)",
+                            lineType = "CREDIT",
+                            credit = tx.amount,
+                            currency = tx.currency,
+                            partyId = tx.partnerId,
+                            partyType = "PARTNER"
+                        )
+                    )
+                )
+
                 db.journalEntryDao().insertEntry(
                     JournalEntryEntity(
-                        entryNumber = "JE-DIV-${txId}-${System.currentTimeMillis() % 100000}",
+                        entryNumber = entryNumber,
                         referenceType = "PARTNER_DIVIDEND",
                         referenceId = txId.toString(),
                         debitAccount = "3201 - أرباح ومسحوبات الشركاء / ${tx.partnerName}",
@@ -2180,12 +3401,45 @@ class NetworkRepository(private val db: AppDatabase) {
             } else if (tx.transactionType == "CAPITAL_ADDITION") {
                 if (partner != null) {
                     db.partnerDao().updatePartner(
-                        partner.copy(capitalInvested = partner.capitalInvested + tx.amount.toDouble())
+                        partner.copy(capitalInvested = partner.capitalInvested.add(tx.amount))
                     )
                 }
+                val entryNumber = "JE-CAP-${txId}-${System.currentTimeMillis() % 100000}"
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = entryNumber,
+                        referenceType = "PARTNER_CAPITAL_ADDITION",
+                        referenceId = txId.toString(),
+                        description = "زيادة رأس مال للشريك ${tx.partnerName}",
+                        createdBy = "المهندس سام"
+                    ),
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1101",
+                            accountName = "الصندوق الرئيسي (النقدية)",
+                            lineType = "DEBIT",
+                            debit = tx.amount,
+                            currency = tx.currency,
+                            partyId = tx.partnerId,
+                            partyType = "PARTNER"
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "3101",
+                            accountName = "رأس مال الشركاء الأساسي / ${tx.partnerName}",
+                            lineType = "CREDIT",
+                            credit = tx.amount,
+                            currency = tx.currency,
+                            partyId = tx.partnerId,
+                            partyType = "PARTNER"
+                        )
+                    )
+                )
+
                 db.journalEntryDao().insertEntry(
                     JournalEntryEntity(
-                        entryNumber = "JE-CAP-${txId}-${System.currentTimeMillis() % 100000}",
+                        entryNumber = entryNumber,
                         referenceType = "PARTNER_CAPITAL_ADDITION",
                         referenceId = txId.toString(),
                         debitAccount = "1101 - الصندوق الرئيسي",
@@ -2217,13 +3471,13 @@ class NetworkRepository(private val db: AppDatabase) {
             val sarRate = BigDecimal.valueOf(if (identity.sarToYerRate > 0) identity.sarToYerRate else 140.0)
             val usdRate = BigDecimal.valueOf(if (identity.usdToYerRate > 0) identity.usdToYerRate else 530.0)
 
-            val rawOriginal = if (asset.originalCost > 0) asset.originalCost else asset.purchaseCost
+            val rawOriginal = if (asset.originalCost > BigDecimal.ZERO) asset.originalCost else asset.purchaseCost
             val baseCost = com.example.util.CurrencyHelper.convertToYer(
-                BigDecimal.valueOf(rawOriginal),
+                rawOriginal,
                 asset.currency,
                 sarRate,
                 usdRate
-            ).toDouble()
+            )
 
             val updatedAsset = asset.copy(
                 purchaseCost = baseCost,
@@ -2238,15 +3492,44 @@ class NetworkRepository(private val db: AppDatabase) {
                 updatedAsset.id
             }
 
-            if (isNew && baseCost > 0) {
+            if (isNew && baseCost > BigDecimal.ZERO) {
+                val entryNumber = "JE-ASSET-${aId}-${System.currentTimeMillis() % 100000}"
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = entryNumber,
+                        referenceType = "FIXED_ASSET_PURCHASE",
+                        referenceId = aId.toString(),
+                        description = "شراء أصل ثابت: ${updatedAsset.assetName}",
+                        createdBy = "المهندس سام"
+                    ),
+                    listOf(
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1501",
+                            accountName = "الأصول الرأسمالية الثابتة / ${updatedAsset.category} - ${updatedAsset.assetName}",
+                            lineType = "DEBIT",
+                            debit = baseCost,
+                            currency = updatedAsset.currency.ifBlank { "USD" }
+                        ),
+                        JournalEntryLineEntity(
+                            headerId = 0L,
+                            accountCode = "1101",
+                            accountName = "الصندوق الرئيسي (النقدية)",
+                            lineType = "CREDIT",
+                            credit = baseCost,
+                            currency = updatedAsset.currency.ifBlank { "USD" }
+                        )
+                    )
+                )
+
                 db.journalEntryDao().insertEntry(
                     JournalEntryEntity(
-                        entryNumber = "JE-ASSET-${aId}-${System.currentTimeMillis() % 100000}",
+                        entryNumber = entryNumber,
                         referenceType = "FIXED_ASSET_PURCHASE",
                         referenceId = aId.toString(),
                         debitAccount = "1501 - الأصول الثابتة / ${updatedAsset.category} - ${updatedAsset.assetName}",
                         creditAccount = "1101 - الصندوق الرئيسي",
-                        amount = BigDecimal.valueOf(baseCost),
+                        amount = baseCost,
                         currency = updatedAsset.currency.ifBlank { "USD" },
                         exchangeRate = BigDecimal.ONE,
                         description = "شراء أصل ثابت: ${updatedAsset.assetName}",
@@ -2288,7 +3571,51 @@ class NetworkRepository(private val db: AppDatabase) {
             }
 
             // Post double-entry journal entry in base currency (YER)
+            val targetCode = if (updatedInvoice.targetType == "ASSETS") "1501" else "5201"
             val targetAcc = if (updatedInvoice.targetType == "ASSETS") "1501 - الأصول الثابتة" else "5201 - مصروفات تشغيلية"
+            val targetName = if (updatedInvoice.targetType == "ASSETS") "الأصول الرأسمالية الثابتة / ${updatedInvoice.supplierName}" else "مصروفات تشغيلية وعمومية / ${updatedInvoice.supplierName}"
+            val exchangeRateVal = if (updatedInvoice.currency.uppercase() == "USD") usdRate else if (updatedInvoice.currency.uppercase() == "SAR") sarRate else BigDecimal.ONE
+
+            try {
+                val lines = listOf(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = targetCode,
+                        accountName = targetName,
+                        lineType = "DEBIT",
+                        debit = baseAmount,
+                        currency = updatedInvoice.currency,
+                        exchangeRate = exchangeRateVal,
+                        originalAmount = rawOriginal,
+                        lineDescription = "مشتريات: ${updatedInvoice.itemsSummary}"
+                    ),
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "1101",
+                        accountName = "الصندوق الرئيسي (النقدية)",
+                        lineType = "CREDIT",
+                        credit = baseAmount,
+                        currency = updatedInvoice.currency,
+                        exchangeRate = exchangeRateVal,
+                        originalAmount = rawOriginal,
+                        lineDescription = "سداد قيمة مشتريات #${updatedInvoice.invoiceNumber}"
+                    )
+                )
+
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = "JE-PURCHASE-${invId}-${System.currentTimeMillis() % 100000}",
+                        referenceType = "PURCHASE_INVOICE",
+                        referenceId = invId.toString(),
+                        description = "فاتورة مشتريات #${updatedInvoice.invoiceNumber} - ${updatedInvoice.supplierName} (${updatedInvoice.itemsSummary})",
+                        createdBy = "المهندس سام"
+                    ),
+                    lines
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error posting balanced entry for purchase invoice: ${e.message}", e)
+            }
+
             db.journalEntryDao().insertEntry(
                 JournalEntryEntity(
                     entryNumber = "JE-PURCHASE-${invId}-${System.currentTimeMillis() % 100000}",
@@ -2298,7 +3625,7 @@ class NetworkRepository(private val db: AppDatabase) {
                     creditAccount = "1101 - الصندوق الرئيسي",
                     amount = baseAmount,
                     currency = updatedInvoice.currency,
-                    exchangeRate = if (updatedInvoice.currency.uppercase() == "USD") usdRate else if (updatedInvoice.currency.uppercase() == "SAR") sarRate else BigDecimal.ONE,
+                    exchangeRate = exchangeRateVal,
                     description = "فاتورة مشتريات #${updatedInvoice.invoiceNumber} - ${updatedInvoice.supplierName} (${updatedInvoice.itemsSummary})",
                     createdBy = "المهندس سام"
                 )
@@ -2309,7 +3636,36 @@ class NetworkRepository(private val db: AppDatabase) {
     }
 
     suspend fun deleteInvoice(invoice: PurchaseInvoiceEntity) = withContext(Dispatchers.IO) {
-        db.purchaseInvoiceDao().deleteInvoice(invoice)
+        db.withTransaction {
+            val voided = invoice.copy(isVoided = true, status = "VOIDED", voidReason = "إلغاء فاتورة المشتريات وتسوية الدفاتر")
+            db.purchaseInvoiceDao().updateInvoice(voided)
+
+            try {
+                val header = db.journalEntryDao().getHeaderByReference("PURCHASE_INVOICE", invoice.id.toString())
+                if (header != null) {
+                    db.journalEntryDao().voidEntryWithReversal(header.id, "إلغاء فاتورة المشتريات وتسوية الدفاتر", "المهندس سام")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("NetworkRepository", "Error voiding header for purchase invoice: ${e.message}", e)
+            }
+
+            // قيد عكسي تلقائي
+            val targetAcc = if (invoice.targetType == "ASSETS") "1501 - الأصول الثابتة" else "5201 - مصروفات تشغيلية"
+            db.journalEntryDao().insertEntry(
+                JournalEntryEntity(
+                    entryNumber = "REV-PURCHASE-${invoice.invoiceNumber}",
+                    referenceType = "VOID_PURCHASE",
+                    referenceId = invoice.invoiceNumber,
+                    debitAccount = "1101 - الصندوق الرئيسي",
+                    creditAccount = "$targetAcc / ${invoice.supplierName}",
+                    amount = invoice.totalAmount,
+                    currency = invoice.currency,
+                    exchangeRate = BigDecimal.ONE,
+                    description = "قيد عكسي لتسوية وإلغاء فاتورة مشتريات #${invoice.invoiceNumber}",
+                    createdBy = "المهندس سام"
+                )
+            )
+        }
     }
 
     /**
