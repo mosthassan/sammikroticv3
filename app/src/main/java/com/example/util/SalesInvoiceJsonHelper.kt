@@ -101,6 +101,60 @@ object SalesInvoiceJsonHelper {
         val paid = obj.optDouble("paidAmount", total)
         val rem = obj.optDouble("remainingAmount", (total - paid).coerceAtLeast(0.0))
 
+        var itemsJsonStr = obj.optString("itemsJson", "")
+        if (itemsJsonStr.isBlank() || itemsJsonStr == "[]") {
+            val possibleItemKeys = listOf("items", "cardItems", "packages", "lines", "details", "invoiceItems")
+            for (k in possibleItemKeys) {
+                if (obj.has(k) && !obj.isNull(k)) {
+                    val arr = obj.optJSONArray(k)
+                    if (arr != null && arr.length() > 0) {
+                        itemsJsonStr = arr.toString()
+                        break
+                    }
+                }
+            }
+        }
+
+        var itemsSummaryStr = obj.optString("itemsSummary", "").trim()
+        var totalCardsCountVal = obj.optInt("totalCardsCount", obj.optInt("cardsCount", obj.optInt("totalCards", 0)))
+
+        // إذا كان itemsSummary فارغاً ولكن itemsJson متوفر، ننشئ itemsSummary تلقائياً ونحسب إجمالي الكروت
+        var calculatedCardsCount = 0
+        var itemsCountVal = obj.optInt("itemsCount", 0)
+        if (itemsJsonStr.isNotBlank() && itemsJsonStr != "[]") {
+            try {
+                val arr = JSONArray(itemsJsonStr)
+                itemsCountVal = arr.length()
+                val summaryParts = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val itObj = arr.getJSONObject(i)
+                    val rawName = itObj.optString("packageName",
+                        itObj.optString("package_name",
+                            itObj.optString("category",
+                                itObj.optString("name",
+                                    itObj.optString("profile",
+                                        itObj.optString("package", ""))))))
+                    val pName = InventoryMatchingHelper.cleanExtractedPackageName(rawName)
+                    val q = itObj.optInt("quantity",
+                        itObj.optInt("qty",
+                            itObj.optInt("count",
+                                itObj.optInt("cardsCount",
+                                    itObj.optInt("totalCards", 1)))))
+                    calculatedCardsCount += q
+                    if (pName.isNotBlank()) {
+                        summaryParts.add("$q كرت [$pName]")
+                    }
+                }
+                if (itemsSummaryStr.isBlank() && summaryParts.isNotEmpty()) {
+                    itemsSummaryStr = summaryParts.joinToString(" • ")
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (totalCardsCountVal <= 0 && calculatedCardsCount > 0) {
+            totalCardsCountVal = calculatedCardsCount
+        }
+
         return CardSalesInvoiceEntity(
             id = 0,
             invoiceNumber = if (num.isNotBlank()) num else "INV-2026-${System.currentTimeMillis() % 100000}",
@@ -112,10 +166,10 @@ object SalesInvoiceJsonHelper {
             totalAmount = BigDecimal.valueOf(total),
             paidAmount = BigDecimal.valueOf(paid),
             remainingAmount = BigDecimal.valueOf(rem),
-            totalCardsCount = obj.optInt("totalCardsCount", 0),
-            itemsCount = obj.optInt("itemsCount", 1),
-            itemsSummary = obj.optString("itemsSummary", ""),
-            itemsJson = obj.optString("itemsJson", "[]"),
+            totalCardsCount = if (totalCardsCountVal > 0) totalCardsCountVal else 0,
+            itemsCount = if (itemsCountVal > 0) itemsCountVal else 1,
+            itemsSummary = itemsSummaryStr,
+            itemsJson = if (itemsJsonStr.isNotBlank()) itemsJsonStr else "[]",
             notes = obj.optString("notes", ""),
             issuerName = obj.optString("issuerName", "المهندس حسن"),
             status = obj.optString("status", "PAID"),

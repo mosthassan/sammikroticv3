@@ -700,6 +700,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * جرد ومطابقة المخزون الفعلي مع مبيعات الفواتير وحساب المبيعات لكل فئة
+     */
+    fun reconcileInventoryWithSalesInvoices(onComplete: (com.example.data.repository.InventoryReconciliationSummary) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val summary = repository.reconcileInventoryWithSalesInvoices()
+                withContext(Dispatchers.Main) {
+                    onComplete(summary)
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error reconciling inventory: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    onComplete(
+                        com.example.data.repository.InventoryReconciliationSummary(
+                            totalInvoicesAudited = 0,
+                            newlyDeductedInvoicesCount = 0,
+                            totalCardsNewlyDeducted = 0,
+                            totalReturnedCardsFromVoided = 0,
+                            categoryReports = emptyList()
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     // Card Sales Invoices (فواتير مبيعات الكروت متعددة الأصناف)
     val salesInvoices: StateFlow<List<CardSalesInvoiceEntity>> = repository.allSalesInvoices
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

@@ -55,7 +55,10 @@ fun CardStockCategoryTab(
     var searchQuery by remember { mutableStateOf("") }
     var showAddStockDialog by remember { mutableStateOf(false) }
     var selectedPackageForRestock by remember { mutableStateOf<String?>(null) }
-    var selectedSubView by remember { mutableIntStateOf(0) } // 0: أرصدة الأصناف, 1: سجل حركات المخزن
+    var selectedSubView by remember { mutableIntStateOf(0) } // 0: أرصدة الأصناف, 1: سجل حركات المخزن, 2: جرد ومطابقة المبيعات
+    var isReconciling by remember { mutableStateOf(false) }
+    var reconciliationSummary by remember { mutableStateOf<com.example.data.repository.InventoryReconciliationSummary?>(null) }
+    var showReconcileDialog by remember { mutableStateOf(false) }
 
     // حساب الإحصائيات العامة للمخزون
     val totalStockCards = inventoryItems.sumOf { it.quantityAvailable }
@@ -177,10 +180,10 @@ fun CardStockCategoryTab(
                     Text(
                         text = "رصيد الأصناف (${inventoryItems.size})",
                         fontFamily = CairoFontFamily,
-                        fontSize = 11.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = if (selectedSubView == 0) FontWeight.Bold else FontWeight.Normal,
                         color = if (selectedSubView == 0) Color.White else TextSecondaryDark,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                     )
                 }
                 Surface(
@@ -189,137 +192,212 @@ fun CardStockCategoryTab(
                     onClick = { selectedSubView = 1 }
                 ) {
                     Text(
-                        text = "سجل حركات المخزن",
+                        text = "سجل الحركات (${movements.size})",
                         fontFamily = CairoFontFamily,
-                        fontSize = 11.5.sp,
+                        fontSize = 11.sp,
                         fontWeight = if (selectedSubView == 1) FontWeight.Bold else FontWeight.Normal,
                         color = if (selectedSubView == 1) Color.White else TextSecondaryDark,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (selectedSubView == 2) MikroTikPrimary else Color.Transparent,
+                    onClick = {
+                        selectedSubView = 2
+                        if (reconciliationSummary == null && !isReconciling) {
+                            isReconciling = true
+                            viewModel.reconcileInventoryWithSalesInvoices { summary ->
+                                isReconciling = false
+                                reconciliationSummary = summary
+                            }
+                        }
+                    }
+                ) {
+                    Text(
+                        text = "جرد ومطابقة المبيعات 📊",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 11.sp,
+                        fontWeight = if (selectedSubView == 2) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selectedSubView == 2) Color.White else TextSecondaryDark,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                     )
                 }
             }
 
-            // Quick Add Stock Button
-            Button(
-                onClick = {
-                    selectedPackageForRestock = null
-                    showAddStockDialog = true
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Icon(Icons.Default.AddShoppingCart, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.Black)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("توريد رصيد بالعدد", fontFamily = CairoFontFamily, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+            // Action Buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Reconcile Button
+                Button(
+                    onClick = {
+                        isReconciling = true
+                        viewModel.reconcileInventoryWithSalesInvoices { summary ->
+                            isReconciling = false
+                            reconciliationSummary = summary
+                            showReconcileDialog = true
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E3A8A)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    enabled = !isReconciling
+                ) {
+                    if (isReconciling) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(13.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.FactCheck, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF38BDF8))
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("مطابقة المبيعات", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
+                // Quick Add Stock Button
+                Button(
+                    onClick = {
+                        selectedPackageForRestock = null
+                        showAddStockDialog = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.AddShoppingCart, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.Black)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("توريد رصيد", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                }
             }
         }
 
-        if (selectedSubView == 0) {
-            // Search field
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("بحث عن صنف أو باقة...", fontFamily = CairoFontFamily, fontSize = 12.sp, color = TextSecondaryDark) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(18.dp)) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(16.dp))
+        when (selectedSubView) {
+            0 -> {
+                // Search field
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("بحث عن صنف أو باقة...", fontFamily = CairoFontFamily, fontSize = 12.sp, color = TextSecondaryDark) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MikroTikPrimary,
+                        unfocusedBorderColor = CyberBorder,
+                        focusedContainerColor = CyberDarkSurface,
+                        unfocusedContainerColor = CyberDarkSurface,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                )
+
+                // Items List
+                if (filteredItems.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Inventory2, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(48.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = if (searchQuery.isNotBlank()) "لا توجد أصناف مطابقة للبحث" else "المخزن فارغ حالياً",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "اضغط على زر (توريد رصيد بالعدد) لإضافة رصيد كروت لأي صنف مباشرة دون الحاجة لتوليد أرقام",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 12.sp,
+                                color = TextSecondaryDark,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
                         }
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(10.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MikroTikPrimary,
-                    unfocusedBorderColor = CyberBorder,
-                    focusedContainerColor = CyberDarkSurface,
-                    unfocusedContainerColor = CyberDarkSurface,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 4.dp)
-            )
-
-            // Items List
-            if (filteredItems.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Inventory2, contentDescription = null, tint = TextSecondaryDark, modifier = Modifier.size(48.dp))
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = if (searchQuery.isNotBlank()) "لا توجد أصناف مطابقة للبحث" else "المخزن فارغ حالياً",
-                            fontFamily = CairoFontFamily,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "اضغط على زر (توريد رصيد بالعدد) لإضافة رصيد كروت لأي صنف مباشرة دون الحاجة لتوليد أرقام",
-                            fontFamily = CairoFontFamily,
-                            fontSize = 12.sp,
-                            color = TextSecondaryDark,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(filteredItems, key = { it.id }) { item ->
-                        CategoryStockCard(
-                            item = item,
-                            onAddStock = {
-                                selectedPackageForRestock = item.packageName
-                                showAddStockDialog = true
-                            },
-                            onIssueInvoice = {
-                                onIssueInvoiceForPackage(item.packageName)
-                            }
-                        )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(filteredItems, key = { it.id }) { item ->
+                            CategoryStockCard(
+                                item = item,
+                                onAddStock = {
+                                    selectedPackageForRestock = item.packageName
+                                    showAddStockDialog = true
+                                },
+                                onIssueInvoice = {
+                                    onIssueInvoiceForPackage(item.packageName)
+                                }
+                            )
+                        }
                     }
                 }
             }
-        } else {
-            // سجل حركات المخزن
-            if (movements.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("لا توجد حركات مخزنية مسجلة بعد.", fontFamily = CairoFontFamily, color = TextSecondaryDark)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(movements, key = { it.id }) { mov ->
-                        MovementItemRow(movement = mov)
+            1 -> {
+                // سجل حركات المخزن
+                if (movements.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("لا توجد حركات مخزنية مسجلة بعد.", fontFamily = CairoFontFamily, color = TextSecondaryDark)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(movements, key = { it.id }) { mov ->
+                            MovementItemRow(movement = mov)
+                        }
                     }
                 }
+            }
+            2 -> {
+                // تقرير جرد ومطابقة المبيعات الشامل
+                SalesInventoryReconciliationView(
+                    summary = reconciliationSummary,
+                    isReconciling = isReconciling,
+                    onRefresh = {
+                        isReconciling = true
+                        viewModel.reconcileInventoryWithSalesInvoices { summary ->
+                            isReconciling = false
+                            reconciliationSummary = summary
+                        }
+                    }
+                )
             }
         }
+    }
+
+    // نافذة نتيجة مطابقة وجرد المبيعات
+    if (showReconcileDialog && reconciliationSummary != null) {
+        InventoryReconciliationResultDialog(
+            summary = reconciliationSummary!!,
+            onDismiss = { showReconcileDialog = false }
+        )
     }
 
     // نافذة توريد وإضافة كروت بالعدد فقط للمخزن
@@ -819,3 +897,502 @@ fun QuickStockSupplyDialog(
         }
     )
 }
+
+/**
+ * شاشة عرض تقرير جرد ومطابقة مبيعات الكروت مع المخزن بالتفصيل
+ */
+@Composable
+fun SalesInventoryReconciliationView(
+    summary: com.example.data.repository.InventoryReconciliationSummary?,
+    isReconciling: Boolean,
+    onRefresh: () -> Unit
+) {
+    if (summary == null && isReconciling) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(40.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = MikroTikPrimary, strokeWidth = 3.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "جاري فحص وتدقيق كافة فواتير المبيعات ومطابقتها مع المخزن...",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 13.sp,
+                    color = TextSecondaryDark
+                )
+            }
+        }
+        return
+    }
+
+    val reports = summary?.categoryReports ?: emptyList()
+    val totalSold = reports.sumOf { it.totalSoldInInvoices }
+    val totalStock = reports.sumOf { it.currentAvailableStock }
+    val totalEntered = totalSold + totalStock
+    val totalSoldValuation = reports.sumOf { it.totalSoldValuation }
+    val totalStockValuation = reports.sumOf { it.availableStockValuation }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Banner card
+        item {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1E36)),
+                border = BorderStroke(1.dp, Color(0xFF1E3A8A)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.FactCheck, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "مطابقة مبيعات الفواتير مع المستودع",
+                                fontFamily = CairoFontFamily,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "فحص دقيق لكافة الكروت المباعة في الفواتير وخصمها من المستودع تلقائياً",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 11.5.sp,
+                            color = TextSecondaryDark
+                        )
+                    }
+
+                    Button(
+                        onClick = onRefresh,
+                        enabled = !isReconciling,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        if (isReconciling) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(13.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("إعادة الفحص", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            }
+        }
+
+        // Metrics Grid
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // الكروت المباعة
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0D1D30),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("إجمالي الكروت المباعة", fontFamily = CairoFontFamily, fontSize = 10.5.sp, color = TextSecondaryDark)
+                        Text("$totalSold كرت", fontFamily = CairoFontFamily, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
+                        Text("${totalSoldValuation.toInt()} ر.ي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                    }
+                }
+
+                // الرصيد المتاح
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0D1D30),
+                    border = BorderStroke(1.dp, ProfitEmerald.copy(alpha = 0.4f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("الرصيد المتبقي بالمخزن", fontFamily = CairoFontFamily, fontSize = 10.5.sp, color = TextSecondaryDark)
+                        Text("$totalStock كرت", fontFamily = CairoFontFamily, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ProfitEmerald)
+                        Text("${totalStockValuation.toInt()} ر.ي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                    }
+                }
+
+                // الإجمالي الكلي
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0D1D30),
+                    border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.4f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("إجمالي الداخل للمخزن", fontFamily = CairoFontFamily, fontSize = 10.5.sp, color = TextSecondaryDark)
+                        Text("$totalEntered كرت", fontFamily = CairoFontFamily, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFFA855F7))
+                        val pct = if (totalEntered > 0) (totalSold * 100 / totalEntered) else 0
+                        Text("نسبة البيع: $pct%", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                    }
+                }
+            }
+        }
+
+        // Category breakdown header
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "تفاصيل الجرد والمطابقة لكل فئة (${reports.size} فئة):",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                if (summary != null && summary.totalCardsNewlyDeducted > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = ProfitEmerald.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, ProfitEmerald.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = "تم خصم ${summary.totalCardsNewlyDeducted} كرت حديثاً ✓",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ProfitEmerald,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (reports.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("لا توجد فئات كروت مسجلة في المخزن حالياً.", fontFamily = CairoFontFamily, color = TextSecondaryDark)
+                }
+            }
+        } else {
+            items(reports, key = { it.packageName }) { rep ->
+                CategoryAuditReportCard(report = rep)
+            }
+        }
+    }
+}
+
+/**
+ * كرت تفصيلي لنتيجة مطابقة الصنف الواحد بين الفواتير والمخزن
+ */
+@Composable
+private fun CategoryAuditReportCard(report: com.example.data.repository.PackageAuditReport) {
+    val totalCount = report.totalSoldInInvoices + report.currentAvailableStock
+    val progress = if (totalCount > 0) report.totalSoldInInvoices.toFloat() / totalCount.toFloat() else 0f
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF091222)),
+        border = BorderStroke(1.dp, Color(0xFF1B2C4B)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Header: Package Name and Badges
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.ConfirmationNumber, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = report.packageName,
+                        fontFamily = CairoFontFamily,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                if (report.newlyDeductedCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = ProfitEmerald.copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, ProfitEmerald)
+                    ) {
+                        Text(
+                            text = "خُصمت ${report.newlyDeductedCount} كرت حديثاً ✓",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ProfitEmerald,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Two primary metrics
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // المباع
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF050B15),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("المباع بالفواتير:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                        Text("${report.totalSoldInInvoices} كرت", fontFamily = CairoFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
+                    }
+                }
+
+                // الرصيد بالمخزن
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF050B15),
+                    border = BorderStroke(1.dp, ProfitEmerald.copy(alpha = 0.3f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("الرصيد المتوفر:", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                        Text(
+                            text = "${report.currentAvailableStock} كرت",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (report.currentAvailableStock == 0) Color(0xFFEF4444) else ProfitEmerald
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Progress Bar of Sales
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("نسبة استهلاك المخزون:", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
+                    val pct = (progress * 100).toInt()
+                    Text("$pct% مباع من إجمالي $totalCount كرت", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
+                }
+                Spacer(modifier = Modifier.height(3.dp))
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = if (progress >= 0.9f) Color(0xFFEF4444) else Color(0xFF38BDF8),
+                    trackColor = Color(0xFF1E293B)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Financial Summary Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF050B15))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "سعر الجملة: ${report.wholesalePrice.toInt()} ر.ي",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 10.5.sp,
+                    color = TextSecondaryDark
+                )
+                Text(
+                    text = "قيمة المبيعات: ${report.totalSoldValuation.toInt()} ر.ي",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF38BDF8)
+                )
+                Text(
+                    text = "قيمة المخزون: ${report.availableStockValuation.toInt()} ر.ي",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ProfitEmerald
+                )
+            }
+        }
+    }
+}
+
+/**
+ * نافذة حوار عرض نتيجة تدقيق ومطابقة مبيعات الكروت مع المخزن
+ */
+@Composable
+fun InventoryReconciliationResultDialog(
+    summary: com.example.data.repository.InventoryReconciliationSummary,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ProfitEmerald, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "اكتمال جرد ومطابقة المخزن",
+                    fontFamily = CairoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color.White
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "تم فحص وتدقيق كافة فواتير المبيعات ومطابقة كروتها مع المخزن بنجاح وتحديث الأرصدة وسجل الحركات فورياً:",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 12.sp,
+                    color = TextSecondaryDark
+                )
+
+                // Stats Cards
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0F1E33),
+                    border = BorderStroke(1.dp, Color(0xFF1E3A8A)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("إجمالي الفواتير المفحوصة:", fontFamily = CairoFontFamily, fontSize = 11.5.sp, color = TextSecondaryDark)
+                            Text("${summary.totalInvoicesAudited} فاتورة", fontFamily = CairoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("فواتير خُصمت كروتها حديثاً:", fontFamily = CairoFontFamily, fontSize = 11.5.sp, color = TextSecondaryDark)
+                            Text("${summary.newlyDeductedInvoicesCount} فاتورة", fontFamily = CairoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ProfitEmerald)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("إجمالي الكروت المخصومة حديثاً:", fontFamily = CairoFontFamily, fontSize = 11.5.sp, color = TextSecondaryDark)
+                            Text("${summary.totalCardsNewlyDeducted} كرت", fontFamily = CairoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ProfitEmerald)
+                        }
+                        if (summary.totalReturnedCardsFromVoided > 0) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("كروت مسترجعة من فواتير ملغاة:", fontFamily = CairoFontFamily, fontSize = 11.5.sp, color = TextSecondaryDark)
+                                Text("${summary.totalReturnedCardsFromVoided} كرت", fontFamily = CairoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
+                            }
+                        }
+                    }
+                }
+
+                // Breakdown list
+                Text(
+                    text = "ملخص أرصدة الأصناف بعد التسوية:",
+                    fontFamily = CairoFontFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(summary.categoryReports) { rep ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF091222),
+                            border = BorderStroke(1.dp, Color(0xFF1B2C4B)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = rep.packageName,
+                                    fontFamily = CairoFontFamily,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = "مباع: ${rep.totalSoldInInvoices}",
+                                        fontFamily = CairoFontFamily,
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF38BDF8)
+                                    )
+                                    Text(
+                                        text = "متاح: ${rep.currentAvailableStock}",
+                                        fontFamily = CairoFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (rep.currentAvailableStock == 0) Color(0xFFEF4444) else ProfitEmerald
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald)
+            ) {
+                Text("المخزن مطابق 100% ✓", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, color = Color.Black)
+            }
+        }
+    )
+}
+

@@ -17,6 +17,9 @@ interface CardSalesInvoiceDao {
     @Query("SELECT * FROM card_sales_invoices ORDER BY invoiceDateMillis DESC")
     fun getAllInvoicesIncludingVoided(): Flow<List<CardSalesInvoiceEntity>>
 
+    @Query("SELECT * FROM card_sales_invoices ORDER BY invoiceDateMillis DESC")
+    suspend fun getAllInvoicesList(): List<CardSalesInvoiceEntity>
+
     @Query("SELECT * FROM card_sales_invoices WHERE isVoided = 0 ORDER BY invoiceDateMillis DESC")
     suspend fun getSalesInvoicesList(): List<CardSalesInvoiceEntity>
 

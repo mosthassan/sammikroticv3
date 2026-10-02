@@ -94,6 +94,9 @@ fun CardSalesInvoicesSubScreen(
     var invoiceForCloneChoice by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
     var showSalesJsonDialog by rememberSaveable { mutableStateOf(false) }
     var isCloningInstant by remember { mutableStateOf(false) }
+    var isAuditingInventory by remember { mutableStateOf(false) }
+    var auditSummary by remember { mutableStateOf<com.example.data.repository.InventoryReconciliationSummary?>(null) }
+    var showAuditDialog by remember { mutableStateOf(false) }
 
     // تتبع الفاتورة المنشأة أو المستنسخة حديثاً لتمييزها وتمرير الشاشة إليها
     var newlyCreatedInvoiceId by remember { mutableStateOf<Long?>(null) }
@@ -249,6 +252,30 @@ fun CardSalesInvoicesSubScreen(
                     Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(13.dp), tint = MikroTikCyan)
                     Spacer(modifier = Modifier.width(3.dp))
                     Text("JSON 📁", fontFamily = CairoFontFamily, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = MikroTikCyan)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        isAuditingInventory = true
+                        viewModel.reconcileInventoryWithSalesInvoices { summary ->
+                            isAuditingInventory = false
+                            auditSummary = summary
+                            showAuditDialog = true
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                    modifier = Modifier.height(34.dp),
+                    enabled = !isAuditingInventory
+                ) {
+                    if (isAuditingInventory) {
+                        CircularProgressIndicator(color = Color(0xFF38BDF8), modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    } else {
+                        Icon(Icons.Default.FactCheck, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF38BDF8))
+                    }
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("مطابقة المخزن", fontFamily = CairoFontFamily, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
                 }
             }
 
@@ -618,6 +645,13 @@ fun CardSalesInvoicesSubScreen(
         SalesInvoiceJsonBackupDialog(
             viewModel = viewModel,
             onDismissRequest = { showSalesJsonDialog = false }
+        )
+    }
+
+    if (showAuditDialog && auditSummary != null) {
+        InventoryReconciliationResultDialog(
+            summary = auditSummary!!,
+            onDismiss = { showAuditDialog = false }
         )
     }
     }

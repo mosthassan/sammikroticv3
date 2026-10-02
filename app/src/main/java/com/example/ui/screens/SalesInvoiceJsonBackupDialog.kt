@@ -682,7 +682,7 @@ fun SalesInvoiceJsonBackupDialog(
                                                 isImporting = false
                                                 Toast.makeText(
                                                     context,
-                                                    "تم استيراد وحفظ $count فاتورة مبيعات كروت بنجاح! ✓",
+                                                    "تم استيراد $count فاتورة مبيعات وخصم كروت الأصناف من المخزن وتحديث الأرصدة تلقائياً! ✓",
                                                     Toast.LENGTH_LONG
                                                 ).show()
                                                 onDismissRequest()

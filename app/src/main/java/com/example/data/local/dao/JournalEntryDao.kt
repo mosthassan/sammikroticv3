@@ -60,6 +60,12 @@ interface JournalEntryDao {
     @Query("SELECT * FROM journal_entry_headers WHERE referenceType = :refType AND referenceId = :refId LIMIT 1")
     suspend fun getHeaderByReference(refType: String, refId: String): JournalEntryHeaderEntity?
 
+    @Query("SELECT * FROM journal_entry_headers WHERE referenceType = :refType AND (referenceId = :refId OR referenceId = :altRefId) LIMIT 1")
+    suspend fun getHeaderByReferenceWithAlt(refType: String, refId: String, altRefId: String): JournalEntryHeaderEntity?
+
+    @Query("DELETE FROM journal_entry_lines WHERE headerId = :headerId")
+    suspend fun deleteLinesByHeaderId(headerId: Long)
+
     @Query("SELECT * FROM journal_entry_lines WHERE accountCode = :code ORDER BY id ASC")
     fun getLinesForAccount(code: String): Flow<List<JournalEntryLineEntity>>
 

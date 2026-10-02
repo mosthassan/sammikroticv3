@@ -298,8 +298,12 @@ class FirebaseDbService {
                         "voucherType" to voucher.voucherType,
                         "amount" to voucher.amount.toDouble(),
                         "currency" to voucher.currency,
+                        "originalAmount" to voucher.originalAmount.toDouble(),
                         "partyName" to voucher.partyName,
                         "retailerId" to (voucher.retailerId ?: 0L),
+                        "invoiceId" to (voucher.invoiceId ?: 0L),
+                        "invoiceNumber" to voucher.invoiceNumber,
+                        "allocatedAmount" to voucher.allocatedAmount.toDouble(),
                         "category" to voucher.category,
                         "paymentMethod" to voucher.paymentMethod,
                         "description" to voucher.description,
@@ -518,14 +522,19 @@ class FirebaseDbService {
                 "voucherType" to voucher.voucherType,
                 "amount" to voucher.amount.toDouble(),
                 "currency" to voucher.currency,
+                "originalAmount" to voucher.originalAmount.toDouble(),
                 "partyName" to voucher.partyName,
                 "retailerId" to (voucher.retailerId ?: 0L),
+                "invoiceId" to (voucher.invoiceId ?: 0L),
+                "invoiceNumber" to voucher.invoiceNumber,
+                "allocatedAmount" to voucher.allocatedAmount.toDouble(),
                 "category" to voucher.category,
                 "paymentMethod" to voucher.paymentMethod,
                 "description" to voucher.description,
                 "dateMillis" to voucher.dateMillis,
                 "issuerName" to voucher.issuerName,
                 "notes" to voucher.notes,
+                "isVoided" to voucher.isVoided,
                 "ownerEmail" to (userEmail ?: "public")
             )
             setDocAsync(docRef, data)
@@ -836,14 +845,22 @@ class FirebaseDbService {
                 }
                 val isVoided = doc.getBoolean("isVoided") ?: false
                 val vCurrency = doc.getString("currency") ?: "YER"
+                val invoiceIdVal = doc.getLong("invoiceId")?.takeIf { it != 0L }
+                val invoiceNumberVal = doc.getString("invoiceNumber") ?: ""
+                val allocatedAmountVal = java.math.BigDecimal.valueOf(doc.getDouble("allocatedAmount") ?: 0.0)
+                val originalAmountVal = java.math.BigDecimal.valueOf(doc.getDouble("originalAmount") ?: 0.0)
                 pulledVouchers[vNumber] = FinancialVoucherEntity(
                     id = doc.getLong("id") ?: 0L,
                     voucherNumber = vNumber,
                     voucherType = doc.getString("voucherType") ?: "RECEIPT",
                     amount = java.math.BigDecimal.valueOf(doc.getDouble("amount") ?: 0.0),
                     currency = vCurrency,
+                    originalAmount = originalAmountVal,
                     partyName = doc.getString("partyName") ?: "",
                     retailerId = doc.getLong("retailerId")?.takeIf { it != 0L },
+                    invoiceId = invoiceIdVal,
+                    invoiceNumber = invoiceNumberVal,
+                    allocatedAmount = allocatedAmountVal,
                     category = doc.getString("category") ?: "عام",
                     paymentMethod = doc.getString("paymentMethod") ?: "CASH",
                     description = doc.getString("description") ?: "",
