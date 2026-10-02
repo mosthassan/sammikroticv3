@@ -923,7 +923,7 @@ fun CreateCardSalesInvoiceDialog(
 
                             // Check stock availability
                             val stockIssue = validItems.firstOrNull { item ->
-                                val baseAvailable = inventoryItems.find { it.packageName == item.packageName }?.quantityAvailable ?: 0
+                                val baseAvailable = findMatchingInventoryItem(inventoryItems, item.packageName)?.quantityAvailable ?: 0
                                 val refundedQty = if (isEditMode || (deleteOldInvoiceOnSave && initialInvoiceToClone != null)) {
                                     sourceItems?.filter { it.packageName == item.packageName }?.sumOf { it.quantity } ?: 0
                                 } else 0
@@ -931,7 +931,7 @@ fun CreateCardSalesInvoiceDialog(
                                 item.quantity > effectiveAvailable
                             }
                             if (stockIssue != null) {
-                                val baseAvailable = inventoryItems.find { it.packageName == stockIssue.packageName }?.quantityAvailable ?: 0
+                                val baseAvailable = findMatchingInventoryItem(inventoryItems, stockIssue.packageName)?.quantityAvailable ?: 0
                                 val refundedQty = if (isEditMode || (deleteOldInvoiceOnSave && initialInvoiceToClone != null)) {
                                     sourceItems?.filter { it.packageName == stockIssue.packageName }?.sumOf { it.quantity } ?: 0
                                 } else 0
@@ -1075,7 +1075,7 @@ private fun InvoiceLineItemCard(
     onUpdateItem: (CardSalesInvoiceItem) -> Unit,
     onDeleteItem: () -> Unit
 ) {
-    val currentStock = inventoryItems.find { it.packageName == item.packageName }?.quantityAvailable ?: 0
+    val currentStock = findMatchingInventoryItem(inventoryItems, item.packageName)?.quantityAvailable ?: 0
     val isExceedingStock = item.quantity > currentStock
 
     var quantityInput by remember(item.id) {
@@ -1431,4 +1431,35 @@ private fun PaymentTypePill(
             )
         }
     }
+}
+
+private fun findMatchingInventoryItem(
+    inventoryItems: List<InventoryItemEntity>,
+    packageName: String
+): InventoryItemEntity? {
+    val clean = packageName.trim()
+    if (clean.isBlank()) return null
+
+    val exact = inventoryItems.find { it.packageName == packageName }
+    if (exact != null) return exact
+
+    val trimmed = inventoryItems.find { it.packageName.trim() == clean }
+    if (trimmed != null) return trimmed
+
+    val targetNorm = normalizeArabicDialog(clean)
+    return inventoryItems.find {
+        val cleanItemName = it.packageName.trim()
+        cleanItemName.equals(clean, ignoreCase = true) ||
+        normalizeArabicDialog(cleanItemName) == targetNorm ||
+        cleanItemName.contains(clean, ignoreCase = true) ||
+        clean.contains(cleanItemName, ignoreCase = true)
+    }
+}
+
+private fun normalizeArabicDialog(text: String): String {
+    return text.trim()
+        .replace("[أإآا]".toRegex(), "ا")
+        .replace("[ةه]".toRegex(), "ه")
+        .replace("[ئىي]".toRegex(), "ي")
+        .lowercase()
 }

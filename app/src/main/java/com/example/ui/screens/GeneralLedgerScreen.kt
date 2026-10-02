@@ -203,55 +203,150 @@ fun GeneralLedgerScreen(
 
             // شريط اختيار الحساب (1101 إلى 5203)
             item {
-                Text(
-                    text = "اختر الحساب المحاسبي:",
-                    fontFamily = CairoFontFamily,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MikroTikCyan
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    val availableAccounts = if (chartOfAccounts.isNotEmpty()) chartOfAccounts else com.example.data.local.dao.ChartOfAccountsDao.DEFAULT_STANDARD_CHART
-                    items(availableAccounts) { acc ->
-                        val isSelected = acc.accountCode == selectedAccountCode
-                        val catColor = when {
-                            acc.accountCode.startsWith("1") -> ReceiptGreen
-                            acc.accountCode.startsWith("2") -> PaymentRed
-                            acc.accountCode.startsWith("3") -> EquityBlue
-                            acc.accountCode.startsWith("4") -> InvestmentGold
-                            acc.accountCode.startsWith("5") -> AssetPurple
-                            else -> MikroTikCyan
-                        }
+                var isAccountDropdownExpanded by remember { mutableStateOf(false) }
+                var accountSearchQuery by remember { mutableStateOf("") }
+                val availableAccounts = if (chartOfAccounts.isNotEmpty()) chartOfAccounts else com.example.data.local.dao.ChartOfAccountsDao.DEFAULT_STANDARD_CHART
 
-                        Surface(
-                            modifier = Modifier.clickable { selectedAccountCode = acc.accountCode },
+                val filteredAccountsForDropdown = remember(availableAccounts, accountSearchQuery) {
+                    if (accountSearchQuery.isBlank()) availableAccounts
+                    else availableAccounts.filter {
+                        it.accountCode.contains(accountSearchQuery.trim()) ||
+                        it.accountNameAr.contains(accountSearchQuery.trim(), ignoreCase = true)
+                    }
+                }
+
+                val selectedAccObj = availableAccounts.find { it.accountCode == selectedAccountCode }
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "اختر الحساب المحاسبي (1101 - 5203):",
+                        fontFamily = CairoFontFamily,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MikroTikCyan
+                    )
+
+                    ExposedDropdownMenuBox(
+                        expanded = isAccountDropdownExpanded,
+                        onExpandedChange = { isAccountDropdownExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedAccObj?.let { "${it.accountCode} - ${it.accountNameAr}" } ?: selectedAccountCode,
+                            onValueChange = {
+                                accountSearchQuery = it
+                                isAccountDropdownExpanded = true
+                            },
+                            label = { Text("بحث برقم أو اسم الحساب", fontFamily = CairoFontFamily, fontSize = 11.5.sp) },
+                            leadingIcon = { Icon(Icons.Default.AccountBalance, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(18.dp)) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isAccountDropdownExpanded) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MikroTikCyan,
+                                unfocusedBorderColor = CyberBorder,
+                                focusedContainerColor = CyberDarkCardElevated,
+                                unfocusedContainerColor = CyberDarkCardElevated,
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            ),
                             shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) catColor.copy(alpha = 0.25f) else CyberDarkCardElevated,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) catColor else CyberBorder)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = isAccountDropdownExpanded,
+                            onDismissRequest = { isAccountDropdownExpanded = false },
+                            modifier = Modifier.background(CyberDarkCardElevated)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            filteredAccountsForDropdown.forEach { acc ->
+                                val accColor = when {
+                                    acc.accountCode.startsWith("1") -> ReceiptGreen
+                                    acc.accountCode.startsWith("2") -> PaymentRed
+                                    acc.accountCode.startsWith("3") -> EquityBlue
+                                    acc.accountCode.startsWith("4") -> InvestmentGold
+                                    acc.accountCode.startsWith("5") -> AssetPurple
+                                    else -> MikroTikCyan
+                                }
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Surface(
+                                                color = accColor.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = acc.accountCode,
+                                                    fontFamily = CairoFontFamily,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 11.5.sp,
+                                                    color = accColor,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = acc.accountNameAr,
+                                                fontFamily = CairoFontFamily,
+                                                fontSize = 12.sp,
+                                                color = Color.White
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        selectedAccountCode = acc.accountCode
+                                        isAccountDropdownExpanded = false
+                                        accountSearchQuery = ""
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(availableAccounts) { acc ->
+                            val isSelected = acc.accountCode == selectedAccountCode
+                            val catColor = when {
+                                acc.accountCode.startsWith("1") -> ReceiptGreen
+                                acc.accountCode.startsWith("2") -> PaymentRed
+                                acc.accountCode.startsWith("3") -> EquityBlue
+                                acc.accountCode.startsWith("4") -> InvestmentGold
+                                acc.accountCode.startsWith("5") -> AssetPurple
+                                else -> MikroTikCyan
+                            }
+
+                            Surface(
+                                modifier = Modifier.clickable { selectedAccountCode = acc.accountCode },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) catColor.copy(alpha = 0.25f) else CyberDarkCardElevated,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) catColor else CyberBorder)
                             ) {
-                                Text(
-                                    text = acc.accountCode,
-                                    fontFamily = CairoFontFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = if (isSelected) catColor else TextSecondaryDark
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = acc.accountNameAr,
-                                    fontFamily = CairoFontFamily,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) Color.White else TextSecondaryDark
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = acc.accountCode,
+                                        fontFamily = CairoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = if (isSelected) catColor else TextSecondaryDark
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = acc.accountNameAr,
+                                        fontFamily = CairoFontFamily,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) Color.White else TextSecondaryDark
+                                    )
+                                }
                             }
                         }
                     }

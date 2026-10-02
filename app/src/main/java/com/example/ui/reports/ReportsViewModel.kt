@@ -144,10 +144,14 @@ class ReportsViewModel(application: Application) : AndroidViewModel(application)
             }
             .sumOf { it.amount.toDouble() } + assetCost
 
-        // 4. Cost of Goods Sold / Purchase Cost
-        val estimatedCostOfGoods = periodInvoices.sumOf { inv ->
-            inv.totalAmount.toDouble() * 0.65
-        }
+        // 4. Direct Cost of Services (Account 5101 - Starlink / Main Internet)
+        // Strictly 0.0 YER if no payment vouchers are posted for Account 5101!
+        val estimatedCostOfGoods = periodVouchers
+            .filter {
+                it.voucherType == "PAYMENT" &&
+                (it.category.contains("5101") || it.category.contains("ستارلينك") || it.category.contains("نت رئيسي") || it.category.contains("اشتراك نت"))
+            }
+            .sumOf { it.amount.toDouble() }
 
         // 5. Depreciation of Assets
         val assetDepreciation = (assetCost - assetVal).coerceAtLeast(0.0)

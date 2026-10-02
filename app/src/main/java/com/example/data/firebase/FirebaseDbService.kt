@@ -285,12 +285,16 @@ class FirebaseDbService {
             // Upload vouchers
             if (vouchRef != null) {
                 for (voucher in vouchers) {
+                    if (voucher.voucherNumber.startsWith("REC-INV-")) {
+                        continue // NEVER upload legacy REC-INV- vouchers
+                    }
                     val docRef = vouchRef.document(voucher.voucherNumber)
                     val data = mapOf(
                         "id" to voucher.id,
                         "voucherNumber" to voucher.voucherNumber,
                         "voucherType" to voucher.voucherType,
                         "amount" to voucher.amount.toDouble(),
+                        "currency" to voucher.currency,
                         "partyName" to voucher.partyName,
                         "retailerId" to (voucher.retailerId ?: 0L),
                         "category" to voucher.category,
@@ -339,8 +343,9 @@ class FirebaseDbService {
                         "id" to item.id,
                         "packageName" to item.packageName,
                         "quantityAvailable" to item.quantityAvailable,
-                        "wholesalePrice" to item.wholesalePrice,
-                        "retailPrice" to item.retailPrice,
+                        "wholesalePrice" to item.wholesalePrice.toDouble(),
+                        "retailPrice" to item.retailPrice.toDouble(),
+                        "costPrice" to item.costPrice.toDouble(),
                         "createdAt" to item.createdAt,
                         "ownerEmail" to (userEmail ?: "public")
                     )
@@ -492,6 +497,7 @@ class FirebaseDbService {
                 "voucherNumber" to voucher.voucherNumber,
                 "voucherType" to voucher.voucherType,
                 "amount" to voucher.amount.toDouble(),
+                "currency" to voucher.currency,
                 "partyName" to voucher.partyName,
                 "retailerId" to (voucher.retailerId ?: 0L),
                 "category" to voucher.category,
@@ -771,11 +777,17 @@ class FirebaseDbService {
         try {
             readCollections(getVouchersRef(userEmail), fs.collection("vouchers")) { doc ->
                 val vNumber = doc.getString("voucherNumber") ?: doc.id
+                if (vNumber.startsWith("REC-INV-") || doc.id.startsWith("REC-INV-")) {
+                    try { doc.reference.delete() } catch (_: Exception) {}
+                    return@readCollections
+                }
+                val vCurrency = doc.getString("currency") ?: "YER"
                 pulledVouchers[vNumber] = FinancialVoucherEntity(
                     id = doc.getLong("id") ?: 0L,
                     voucherNumber = vNumber,
                     voucherType = doc.getString("voucherType") ?: "RECEIPT",
                     amount = java.math.BigDecimal.valueOf(doc.getDouble("amount") ?: 0.0),
+                    currency = vCurrency,
                     partyName = doc.getString("partyName") ?: "",
                     retailerId = doc.getLong("retailerId")?.takeIf { it != 0L },
                     category = doc.getString("category") ?: "عام",

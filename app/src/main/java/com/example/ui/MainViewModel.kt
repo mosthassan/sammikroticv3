@@ -531,6 +531,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importRetailersBatch(
+        retailersToImport: List<RetailerEntity>,
+        replaceExisting: Boolean = false,
+        onComplete: (importedCount: Int) -> Unit
+    ) {
+        onComplete(retailersToImport.size)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val count = repository.importRetailersBatch(retailersToImport, replaceExisting)
+                val userEmail = _currentUser.value?.email?.takeIf { it.isNotBlank() }
+                retailersToImport.forEach { r ->
+                    firebaseService.pushRetailer(r, userEmail)
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error importing retailers in background", e)
+            }
+        }
+    }
+
+    fun importPurchaseInvoicesBatch(
+        invoicesToImport: List<PurchaseInvoiceEntity>,
+        replaceExisting: Boolean = false,
+        onComplete: (importedCount: Int) -> Unit
+    ) {
+        onComplete(invoicesToImport.size)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.importPurchaseInvoicesBatch(invoicesToImport, replaceExisting)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error importing purchase invoices in background", e)
+            }
+        }
+    }
+
+    fun importSalesInvoicesBatch(
+        invoicesToImport: List<CardSalesInvoiceEntity>,
+        replaceExisting: Boolean = false,
+        onComplete: (importedCount: Int) -> Unit
+    ) {
+        onComplete(invoicesToImport.size)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repository.importSalesInvoicesBatch(invoicesToImport, replaceExisting)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error importing sales invoices in background", e)
+            }
+        }
+    }
+
     fun updateDeviceCoordinates(
         deviceId: Long,
         latitude: Double,
@@ -1156,6 +1205,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun createVoucher(
         voucherType: String,
         amount: Double,
+        currency: String = "YER",
         partyName: String,
         retailerId: Long?,
         category: String,
@@ -1174,6 +1224,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val id = repository.createVoucher(
                     voucherType = voucherType,
                     amount = amount,
+                    currency = currency,
                     partyName = partyName,
                     retailerId = retailerId,
                     category = category,
@@ -1191,6 +1242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         voucherNumber = voucherNumberGenerated,
                         voucherType = voucherType,
                         amount = BigDecimal.valueOf(amount),
+                        currency = currency,
                         partyName = partyName,
                         retailerId = retailerId,
                         invoiceId = invoiceId,

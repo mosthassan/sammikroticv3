@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.LocalAtm
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -143,6 +145,8 @@ fun DistributionScreen(
     var isReconciling by remember { mutableStateOf(false) }
     var distributionSubTab by remember { mutableIntStateOf(0) } // 0: نقاط البيع والديون, 1: فواتير المبيعات, 2: مخزن الأصناف بالعدد
     var showCreateInvoiceDialog by remember { mutableStateOf(false) }
+    var showCustomerBackupDialog by remember { mutableStateOf(false) }
+    var showSalesInvoiceBackupDialog by remember { mutableStateOf(false) }
     var selectedRetailerForInvoice by remember { mutableStateOf<RetailerEntity?>(null) }
     var invoiceToClone by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
     var invoiceToEdit by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
@@ -227,6 +231,30 @@ fun DistributionScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            if (distributionSubTab == 1) {
+                                showSalesInvoiceBackupDialog = true
+                            } else {
+                                showCustomerBackupDialog = true
+                            }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MikroTikCyan),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(13.dp), tint = MikroTikCyan)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = if (distributionSubTab == 1) "JSON الفواتير 📁" else "JSON العملاء 📁",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MikroTikCyan
+                        )
+                    }
+
                     if (distributionSubTab != 1) {
                         Button(
                             onClick = {
@@ -835,6 +863,20 @@ fun DistributionScreen(
                         Text("إلغاء")
                     }
                 }
+            )
+        }
+
+        if (showCustomerBackupDialog) {
+            CustomerJsonBackupDialog(
+                viewModel = viewModel,
+                onDismissRequest = { showCustomerBackupDialog = false }
+            )
+        }
+
+        if (showSalesInvoiceBackupDialog) {
+            SalesInvoiceJsonBackupDialog(
+                viewModel = viewModel,
+                onDismissRequest = { showSalesInvoiceBackupDialog = false }
             )
         }
 

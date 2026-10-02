@@ -12,9 +12,13 @@ class CustomerRepository(
     private val retailerDao: RetailerDao
 ) {
     /**
-     * Calculates customer balance, total sales, and total paid EXCLUSIVELY via CustomerLedgerDao.getCustomerAccountSummary
+     * Calculates customer balance, total sales, and total paid EXCLUSIVELY via CustomerLedgerDao.getCustomerAccountSummary (account 1201)
      */
     fun getCustomerAccountSummary(customerId: Long): Flow<CustomerAccountSummary> {
+        return customerLedgerDao.getCustomerAccountSummary(customerId)
+    }
+
+    fun getDetailedCustomerStatement(customerId: Long): Flow<CustomerAccountSummary> {
         return customerLedgerDao.getCustomerAccountSummary(customerId)
     }
 

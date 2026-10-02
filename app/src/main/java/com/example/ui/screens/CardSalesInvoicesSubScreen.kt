@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,6 +92,7 @@ fun CardSalesInvoicesSubScreen(
     var selectedInvoiceForDetail by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
     var invoiceToDelete by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
     var invoiceForCloneChoice by remember { mutableStateOf<CardSalesInvoiceEntity?>(null) }
+    var showSalesJsonDialog by rememberSaveable { mutableStateOf(false) }
     var isCloningInstant by remember { mutableStateOf(false) }
 
     // تتبع الفاتورة المنشأة أو المستنسخة حديثاً لتمييزها وتمرير الشاشة إليها
@@ -223,17 +225,31 @@ fun CardSalesInvoicesSubScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // زر إصدار فاتورة جديدة مدمج
-            Button(
-                onClick = onOpenCreateInvoice,
-                colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.height(34.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("فاتورة جديدة", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+            // زر إصدار فاتورة جديدة + زر النسخ الاحتياطي
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Button(
+                    onClick = onOpenCreateInvoice,
+                    colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("فاتورة جديدة", fontFamily = CairoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                }
+
+                OutlinedButton(
+                    onClick = { showSalesJsonDialog = true },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MikroTikCyan),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(13.dp), tint = MikroTikCyan)
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("JSON 📁", fontFamily = CairoFontFamily, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = MikroTikCyan)
+                }
             }
 
             // فلاتر الحالة السريعة
@@ -597,6 +613,13 @@ fun CardSalesInvoicesSubScreen(
             },
             containerColor = CyberDarkSurface
         )
+
+    if (showSalesJsonDialog) {
+        SalesInvoiceJsonBackupDialog(
+            viewModel = viewModel,
+            onDismissRequest = { showSalesJsonDialog = false }
+        )
+    }
     }
 }
 

@@ -1066,14 +1066,7 @@ fun AgentAccountStatementModal(
 
     val totalPurchases = agentInvoices.sumOf { it.totalAmount.toDouble() }
 
-    val unlinkedInvoicePaidSum = agentInvoices.sumOf { inv ->
-        val hasVoucher = agentReceiptVouchers.any { v ->
-            v.invoiceId == inv.id || (v.invoiceNumber.isNotBlank() && v.invoiceNumber == inv.invoiceNumber)
-        }
-        if (!hasVoucher && inv.paidAmount > java.math.BigDecimal.ZERO) inv.paidAmount.toDouble() else 0.0
-    }
-
-    val totalPaid = agentReceiptVouchers.sumOf { it.amount.toDouble() } + unlinkedInvoicePaidSum
+    val totalPaid = agentReceiptVouchers.sumOf { it.amount.toDouble() }
     val finalBalance = totalPurchases - totalPaid
 
     val txList = remember(agentInvoices, agentReceiptVouchers) {
@@ -1091,24 +1084,6 @@ fun AgentAccountStatementModal(
                     creditAmount = 0.0
                 )
             )
-
-            val hasVoucher = agentReceiptVouchers.any { v ->
-                v.invoiceId == inv.id || (v.invoiceNumber.isNotBlank() && v.invoiceNumber == inv.invoiceNumber)
-            }
-            if (!hasVoucher && inv.paidAmount > java.math.BigDecimal.ZERO) {
-                list.add(
-                    StatementTxItem(
-                        id = "INV_PAY_${inv.id}",
-                        dateMillis = inv.invoiceDateMillis,
-                        typeLabel = "سداد مع الفاتورة",
-                        isReceipt = true,
-                        referenceNumber = "REC-${inv.invoiceNumber}",
-                        details = "دفعة مسددة مع الفاتورة ${inv.invoiceNumber}",
-                        debitAmount = 0.0,
-                        creditAmount = inv.paidAmount.toDouble()
-                    )
-                )
-            }
         }
 
         agentReceiptVouchers.forEach { v ->

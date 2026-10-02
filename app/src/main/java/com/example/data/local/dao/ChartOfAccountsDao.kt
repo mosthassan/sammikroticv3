@@ -148,11 +148,11 @@ interface ChartOfAccountsDao {
             // 5000 - تكلفة المبيعات والمصروفات (COGS & Expenses)
             ChartOfAccountsEntity(
                 accountCode = "5101",
-                accountNameAr = "تكلفة الكروت المباعة (COGS)",
-                accountNameEn = "Cost of Goods Sold - Cards",
+                accountNameAr = "اشتراك النت الرئيسي (ستارلينك)",
+                accountNameEn = "Main Internet Subscription / Starlink",
                 accountType = "EXPENSE",
                 normalBalance = "DEBIT",
-                description = "التكلفة المباشرة لإنتاج وطباعة واستهلاك حزم الكروت المباعة"
+                description = "التكلفة المباشرة لاشتراك خط الإنترنت الرئيسي والربط مع المزود (ستارلينك)"
             ),
             ChartOfAccountsEntity(
                 accountCode = "5201",

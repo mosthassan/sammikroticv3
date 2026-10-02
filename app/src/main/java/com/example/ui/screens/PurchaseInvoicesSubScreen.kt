@@ -96,6 +96,7 @@ fun PurchaseInvoicesSubScreen(
     var invoiceToDelete by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
     var invoiceToEdit by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
     var showJsonImportDialog by remember { mutableStateOf(false) }
+    var showPurchaseInvoiceBackupDialog by remember { mutableStateOf(false) }
     var directParsedInvoice by remember { mutableStateOf<ParsedInvoiceData?>(null) }
 
     val filterOptions = listOf("الكل", "أصول ثابتة (CAPEX)", "مصروفات مشتريات (OPEX)")
@@ -246,7 +247,7 @@ fun PurchaseInvoicesSubScreen(
                             }
 
                             Button(
-                                onClick = { showJsonImportDialog = true },
+                                onClick = { showPurchaseInvoiceBackupDialog = true },
                                 colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
@@ -254,10 +255,10 @@ fun PurchaseInvoicesSubScreen(
                                     .height(44.dp)
                                     .testTag("import_json_invoice_button")
                             ) {
-                                Icon(Icons.Default.Description, contentDescription = null, tint = Color.White)
+                                Icon(Icons.Default.FileUpload, contentDescription = null, tint = Color.White)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "استيراد فاتورة من ملف JSON (بدون توكن) 📄 ⚡",
+                                    text = "تصدير واستيراد فواتير المشتريات (JSON) 📁 ⚡",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp,
                                     color = Color.White,
@@ -442,6 +443,13 @@ fun PurchaseInvoicesSubScreen(
                 directParsedInvoice = data
                 showJsonImportDialog = false
             }
+        )
+    }
+
+    if (showPurchaseInvoiceBackupDialog) {
+        PurchaseInvoiceJsonBackupDialog(
+            viewModel = viewModel,
+            onDismissRequest = { showPurchaseInvoiceBackupDialog = false }
         )
     }
 }

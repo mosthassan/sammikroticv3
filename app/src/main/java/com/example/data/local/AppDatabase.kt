@@ -445,6 +445,15 @@ abstract class AppDatabase : RoomDatabase() {
 
             override fun onOpen(db: SupportSQLiteDatabase) {
                 super.onOpen(db)
+                // Database Startup Sanitization Step: Purge any synchronized legacy REC-INV- or INV_PAY_ rows
+                try {
+                    db.execSQL("DELETE FROM journal_entry_lines WHERE headerId IN (SELECT id FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%')")
+                    db.execSQL("DELETE FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%'")
+                    db.execSQL("DELETE FROM customer_ledger WHERE referenceId LIKE 'REC-INV-%' OR referenceId LIKE 'INV_PAY_%'")
+                    db.execSQL("DELETE FROM financial_vouchers WHERE voucherNumber LIKE 'REC-INV-%'")
+                } catch (e: Throwable) {
+                    android.util.Log.e("AppDatabase", "Error sanitizing REC-INV- legacy rows: ${e.message}")
+                }
                 scope.launch {
                     try {
                         INSTANCE?.let { database ->

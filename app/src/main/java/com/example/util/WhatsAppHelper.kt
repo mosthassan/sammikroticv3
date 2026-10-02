@@ -218,8 +218,8 @@ object WhatsAppHelper {
             builder.appendLine("🔗 *مرتبط بالفاتورة رقم:* #${voucher.invoiceNumber}")
         }
         builder.appendLine("─────────────────────────")
-        builder.appendLine("💰 *مبلغ السند الحالي:* ${voucher.amount.toInt()} ريال يمني")
-        builder.appendLine("💵 *المبلغ المسدد:* ${if (voucher.isVoided) 0 else voucher.amount.toInt()} ريال يمني")
+        builder.appendLine("💰 *مبلغ السند الحالي:* ${CurrencyHelper.formatAmount(voucher.amount, voucher.currency)}")
+        builder.appendLine("💵 *المبلغ المسدد:* ${if (voucher.isVoided) "0" else CurrencyHelper.formatAmount(voucher.amount, voucher.currency)}")
         if (retailerBalanceOwed != null) {
             builder.appendLine("💳 *إجمالي الرصيد التراكمي المستحق الكلي في ذمتكم حتى تاريخه:* ${retailerBalanceOwed.toInt()} ريال يمني")
         }

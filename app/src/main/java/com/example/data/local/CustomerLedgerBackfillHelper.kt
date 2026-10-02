@@ -69,23 +69,6 @@ object CustomerLedgerBackfillHelper {
                                 description = "فاتورة مبيعات #${inv.invoiceNumber}"
                             )
                         )
-
-                        val hasLinkedVoucher = allVouchers.any { v ->
-                            !v.isVoided && (v.invoiceId == inv.id || (v.invoiceNumber.isNotBlank() && v.invoiceNumber == inv.invoiceNumber))
-                        }
-                        if (!hasLinkedVoucher && inv.paidAmount > BigDecimal.ZERO) {
-                            newEntries.add(
-                                CustomerLedgerEntity(
-                                    customerId = customerId,
-                                    transactionDate = inv.invoiceDateMillis,
-                                    transactionType = "PAYMENT",
-                                    referenceId = "INV_PAY_${inv.id}",
-                                    debit = BigDecimal.ZERO,
-                                    credit = inv.paidAmount,
-                                    description = "سداد مع الفاتورة #${inv.invoiceNumber}"
-                                )
-                            )
-                        }
                     }
                 } catch (e: Throwable) {
                     Log.e("LedgerBackfill", "Error parsing invoice entry for backfill: ${e.message}")

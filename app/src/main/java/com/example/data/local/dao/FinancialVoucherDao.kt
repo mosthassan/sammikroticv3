@@ -59,6 +59,9 @@ interface FinancialVoucherDao {
     @Query("SELECT SUM(amount) FROM financial_vouchers WHERE voucherType = 'PAYMENT' AND isVoided = 0 AND category NOT IN ('CAPEX', 'أصول ثابتة', 'أصول', 'رأس المال', 'CAPEX / أصول ثابتة') AND dateMillis BETWEEN :startDate AND :endDate")
     suspend fun getTotalExpensesAmount(startDate: Long, endDate: Long): Double?
 
+    @Query("DELETE FROM financial_vouchers WHERE voucherNumber LIKE 'REC-INV-%'")
+    suspend fun sanitizeLegacyRecInvVouchers()
+
     @Query("DELETE FROM financial_vouchers")
     suspend fun deleteAllVouchers()
 }

@@ -340,16 +340,16 @@ fun ProfitLossScreen(
                     HorizontalDivider(color = CyberBorder, thickness = 0.5.dp)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // 2. تكلفة البضاعة المباعة (COGS)
+                    // 2. تكلفة الخدمات المباشرة (COGS - ستارلينك)
                     IncomeStatementSectionHeader(
-                        title = "2. (-) تكلفة البضاعة المباعة (COGS)",
+                        title = "2. (-) تكلفة الخدمات المباشرة / COGS (5101)",
                         totalAmount = r?.cogs ?: BigDecimal.ZERO,
                         df = df,
                         color = PaymentRed
                     )
                     IncomeStatementLineItem(
                         code = "5101",
-                        name = "تكلفة الكروت المباعة (طباعة، استهلاك حزم، تكلفة الوحدات)",
+                        name = "اشتراك النت الرئيسي (ستارلينك)",
                         amount = r?.cogs ?: BigDecimal.ZERO,
                         df = df,
                         color = PaymentRed

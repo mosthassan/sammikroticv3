@@ -428,29 +428,12 @@ class NetworkRepository(private val db: AppDatabase) {
 
         val totalGrossRevenue = cardSalesRevenue.add(directSubscriptions)
 
-        // COGS
-        var totalCogs = BigDecimal.ZERO
-        invoices.forEach { inv ->
-            try {
-                val jsonArray = JSONArray(inv.itemsJson)
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val pkgName = obj.optString("packageName", "")
-                    val qty = obj.optInt("quantity", 0)
-                    val invItem = db.inventoryDao().getItemByPackageName(pkgName)
-                    val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
-                        invItem.costPrice
-                    } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
-                        invItem.wholesalePrice.multiply(BigDecimal("0.5"))
-                    } else {
-                        BigDecimal.valueOf(obj.optDouble("unitPrice", 0.0)).multiply(BigDecimal("0.5"))
-                    }
-                    totalCogs = totalCogs.add(unitCost.multiply(BigDecimal.valueOf(qty.toLong())))
-                }
-            } catch (e: Exception) {
-                totalCogs = totalCogs.add(inv.totalAmount.multiply(BigDecimal("0.5")))
-            }
-        }
+        // Cost of Services (COGS - Account 5101 Main Internet Subscription / Starlink)
+        // Strictly fetched from posted journal entries / vouchers for Account 5101.
+        // If NO entries exist for Account 5101, COGS MUST strictly evaluate to 0 YER!
+        val cogsRows = db.journalEntryDao().getIncomeStatementRows(startDateMillis, endDateMillis).first()
+        val cogsRow = cogsRows.find { it.accountCode == "5101" }
+        val totalCogs = cogsRow?.let { (it.totalDebit.subtract(it.totalCredit)).max(BigDecimal.ZERO) } ?: BigDecimal.ZERO
 
         // المصروفات من السندات
         val vouchers = db.financialVoucherDao().getVouchersList()
@@ -985,6 +968,39 @@ class NetworkRepository(private val db: AppDatabase) {
         db.inventoryDao().deleteItem(id)
     }
 
+    suspend fun findInventoryItemFlexible(packageName: String): InventoryItemEntity? {
+        val cleanName = packageName.trim()
+        if (cleanName.isBlank()) return null
+
+        // 1. Exact match from DB
+        val exact = db.inventoryDao().getItemByPackageName(packageName)
+        if (exact != null) return exact
+
+        // 2. Trimmed match from DB
+        val trimmed = db.inventoryDao().getItemByPackageNameTrimmed(cleanName)
+        if (trimmed != null) return trimmed
+
+        // 3. Normalized / case-insensitive / substring match from all items list
+        val allItems = db.inventoryDao().getAllItemsList()
+        val normalizedTarget = normalizeArabicText(cleanName)
+
+        return allItems.find { item ->
+            val cleanItemName = item.packageName.trim()
+            cleanItemName.equals(cleanName, ignoreCase = true) ||
+            normalizeArabicText(cleanItemName) == normalizedTarget ||
+            cleanItemName.contains(cleanName, ignoreCase = true) ||
+            cleanName.contains(cleanItemName, ignoreCase = true)
+        }
+    }
+
+    private fun normalizeArabicText(text: String): String {
+        return text.trim()
+            .replace("[أإآا]".toRegex(), "ا")
+            .replace("[ةه]".toRegex(), "ه")
+            .replace("[ئىي]".toRegex(), "ي")
+            .lowercase()
+    }
+
     /**
      * توريد أو إضافة كمية للمخزن بالعدد فقط بدون إنشاء أو توليد أرقام كروت
      * يزداد الرصيد المتاح لهذا الصنف تلقائياً ويوثق في سجل حركات المخزن
@@ -1124,7 +1140,7 @@ class NetworkRepository(private val db: AppDatabase) {
 
             // 1. Check stock for ALL items in transaction first
             for (item in items) {
-                val inventoryItem = db.inventoryDao().getItemByPackageName(item.packageName)
+                val inventoryItem = findInventoryItemFlexible(item.packageName)
                 val availableInventoryQty = inventoryItem?.quantityAvailable ?: 0
                 val availableCardsCount = db.cardDao().getAvailableCardsByCategory(item.packageName, item.quantity).size
                 val effectiveAvailableStock = maxOf(availableInventoryQty, availableCardsCount)
@@ -1209,9 +1225,8 @@ class NetworkRepository(private val db: AppDatabase) {
                 )
             }
 
-            // 2. Stock Deduction, Card Status Update & COGS Calculation
+            // 2. Stock Deduction and Card Status Update
             val timestamp = System.currentTimeMillis()
-            var totalInvoiceCogs = BigDecimal.ZERO
 
             items.forEach { item ->
                 val availableCards = db.cardDao().getAvailableCardsByCategory(item.packageName, item.quantity)
@@ -1220,22 +1235,19 @@ class NetworkRepository(private val db: AppDatabase) {
                     db.cardDao().markCardsSoldForInvoice(cardIds, invoiceId, timestamp)
                 }
 
-                val existing = db.inventoryDao().getItemByPackageName(item.packageName)
-                val unitCost = if (existing != null && existing.costPrice > BigDecimal.ZERO) {
-                    existing.costPrice
-                } else if (existing != null && existing.wholesalePrice > BigDecimal.ZERO) {
-                    existing.wholesalePrice.multiply(BigDecimal("0.5"))
-                } else {
-                    BigDecimal.valueOf(item.unitPrice).multiply(BigDecimal("0.5"))
-                }
-                val lineCogs = unitCost.multiply(BigDecimal.valueOf(item.quantity.toLong()))
-                totalInvoiceCogs = totalInvoiceCogs.add(lineCogs)
-
+                val existing = findInventoryItemFlexible(item.packageName)
                 val newQty = if (existing != null) {
                     val updated = (existing.quantityAvailable - item.quantity).coerceAtLeast(0)
                     db.inventoryDao().updateItem(existing.copy(quantityAvailable = updated))
                     updated
                 } else {
+                    val newItem = InventoryItemEntity(
+                        packageName = item.packageName.trim(),
+                        quantityAvailable = 0,
+                        wholesalePrice = BigDecimal.valueOf(item.unitPrice),
+                        retailPrice = BigDecimal.valueOf(item.retailPrice)
+                    )
+                    db.inventoryDao().insertItem(newItem)
                     0
                 }
 
@@ -1489,46 +1501,6 @@ class NetworkRepository(private val db: AppDatabase) {
                 }
             }
 
-            // 3. محرك تكلفة البضاعة المباعة (COGS Engine): قيد إثبات تكلفة الكروت المباعة ومقابلة المخزون
-            if (totalInvoiceCogs > BigDecimal.ZERO) {
-                try {
-                    val cogsLines = listOf(
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "5101",
-                            accountName = "تكلفة الكروت المباعة (COGS)",
-                            lineType = "DEBIT",
-                            debit = totalInvoiceCogs,
-                            currency = "YER",
-                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber ($itemsSummary)"
-                        ),
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1301",
-                            accountName = "مخزون كروت الشبكة المطبوعة",
-                            lineType = "CREDIT",
-                            credit = totalInvoiceCogs,
-                            currency = "YER",
-                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
-                        )
-                    )
-
-                    db.journalEntryDao().postBalancedEntry(
-                        JournalEntryHeaderEntity(
-                            entryNumber = "JE-COGS-$invoiceNumber",
-                            dateMillis = System.currentTimeMillis(),
-                            referenceType = "COGS",
-                            referenceId = invoiceId.toString(),
-                            description = "تكلفة البضاعة المباعة (COGS) ومقابلة المخزون - فاتورة #$invoiceNumber",
-                            createdBy = issuerName
-                        ),
-                        cogsLines
-                    )
-                } catch (e: Exception) {
-                    android.util.Log.e("NetworkRepository", "Error posting COGS entry for sales invoice: ${e.message}", e)
-                }
-            }
-
             // تسوية دفتر الأستاذ دون تعديل مزدوج
             reconcileAccountingLedgerInternal()
 
@@ -1565,7 +1537,7 @@ class NetworkRepository(private val db: AppDatabase) {
                         val pkgName = obj.optString("packageName", "")
                         val qty = obj.optInt("quantity", 0)
                         if (pkgName.isNotBlank() && qty > 0) {
-                            val item = db.inventoryDao().getItemByPackageName(pkgName)
+                            val item = findInventoryItemFlexible(pkgName)
                             if (item != null) {
                                 val newQty = item.quantityAvailable + qty
                                 db.inventoryDao().updateItem(item.copy(quantityAvailable = newQty))
@@ -1581,6 +1553,12 @@ class NetworkRepository(private val db: AppDatabase) {
                                         notes = "استرجاع كميات المخزن لتعديل الفاتورة #${originalInvoice.invoiceNumber}"
                                     )
                                 )
+                            } else {
+                                val newItem = InventoryItemEntity(
+                                    packageName = pkgName.trim(),
+                                    quantityAvailable = qty
+                                )
+                                db.inventoryDao().insertItem(newItem)
                             }
                         }
                     }
@@ -1593,23 +1571,33 @@ class NetworkRepository(private val db: AppDatabase) {
 
             // 3. خصم الأصناف الجديدة من المخزن
             items.forEach { item ->
-                val inventoryItem = db.inventoryDao().getItemByPackageName(item.packageName)
-                if (inventoryItem != null) {
-                    val newQty = (inventoryItem.quantityAvailable - item.quantity).coerceAtLeast(0)
-                    db.inventoryDao().updateItem(inventoryItem.copy(quantityAvailable = newQty))
-                    db.inventoryMovementDao().insertMovement(
-                        InventoryMovementEntity(
-                            packageName = item.packageName,
-                            movementType = "SALE",
-                            quantityChange = -item.quantity,
-                            resultingBalance = newQty,
-                            referenceNumber = "EDIT-${originalInvoice.invoiceNumber}",
-                            customerOrSupplier = customerName,
-                            unitPrice = item.unitPrice,
-                            notes = "تعديل فاتورة مبيعات #${originalInvoice.invoiceNumber}"
-                        )
+                val inventoryItem = findInventoryItemFlexible(item.packageName)
+                val newQty = if (inventoryItem != null) {
+                    val q = (inventoryItem.quantityAvailable - item.quantity).coerceAtLeast(0)
+                    db.inventoryDao().updateItem(inventoryItem.copy(quantityAvailable = q))
+                    q
+                } else {
+                    val newItem = InventoryItemEntity(
+                        packageName = item.packageName.trim(),
+                        quantityAvailable = 0,
+                        wholesalePrice = BigDecimal.valueOf(item.unitPrice),
+                        retailPrice = BigDecimal.valueOf(item.retailPrice)
                     )
+                    db.inventoryDao().insertItem(newItem)
+                    0
                 }
+                db.inventoryMovementDao().insertMovement(
+                    InventoryMovementEntity(
+                        packageName = item.packageName,
+                        movementType = "SALE",
+                        quantityChange = -item.quantity,
+                        resultingBalance = newQty,
+                        referenceNumber = "EDIT-${originalInvoice.invoiceNumber}",
+                        customerOrSupplier = customerName,
+                        unitPrice = item.unitPrice,
+                        notes = "تعديل فاتورة مبيعات #${originalInvoice.invoiceNumber}"
+                    )
+                )
             }
 
             // 4. احتساب المبالغ والأصناف
@@ -1847,7 +1835,13 @@ class NetworkRepository(private val db: AppDatabase) {
      */
     private suspend fun reconcileAccountingLedgerInternal() {
         try {
-            // 0. تنظيف أي فواتير وهمية قديمة
+            // 0. تنظيف وتطهير أي قيود أو سندات قديمة من بادئة REC-INV- أو INV_PAY_
+            db.journalEntryDao().sanitizeLegacyRecInvLines()
+            db.journalEntryDao().sanitizeLegacyRecInvHeaders()
+            db.customerLedgerDao().sanitizeLegacyRecInvLedger()
+            db.financialVoucherDao().sanitizeLegacyRecInvVouchers()
+
+            // تنظيف أي فواتير وهمية قديمة
             db.cardSalesInvoiceDao().deleteSyntheticInvoices()
 
             val retailers = db.retailerDao().getRetailersList()
@@ -2009,24 +2003,6 @@ class NetworkRepository(private val db: AppDatabase) {
                             description = "فاتورة مبيعات #${inv.invoiceNumber}"
                         )
                     )
-
-                    // Insert an extra payment entry ONLY if there is no voucher in retailerReceipts linked to this invoice
-                    val hasLinkedVoucher = retailerReceipts.any { v ->
-                        v.invoiceId == inv.id || (v.invoiceNumber.isNotBlank() && v.invoiceNumber == inv.invoiceNumber)
-                    }
-                    if (!hasLinkedVoucher && inv.paidAmount > BigDecimal.ZERO) {
-                        db.customerLedgerDao().insertLedgerEntry(
-                            com.example.data.local.entity.CustomerLedgerEntity(
-                                customerId = retailer.id,
-                                transactionDate = inv.invoiceDateMillis,
-                                transactionType = "PAYMENT",
-                                referenceId = "INV_PAY_${inv.id}",
-                                debit = BigDecimal.ZERO,
-                                credit = inv.paidAmount,
-                                description = "سداد مع الفاتورة #${inv.invoiceNumber}"
-                            )
-                        )
-                    }
                 }
 
                 // Insert ALL non-voided receipt/payment vouchers for this retailer
@@ -2084,7 +2060,7 @@ class NetworkRepository(private val db: AppDatabase) {
                         val pkgName = obj.optString("packageName", "")
                         val qty = obj.optInt("quantity", 0)
                         if (pkgName.isNotBlank() && qty > 0) {
-                            val item = db.inventoryDao().getItemByPackageName(pkgName)
+                            val item = findInventoryItemFlexible(pkgName)
                             if (item != null) {
                                 val newQty = item.quantityAvailable + qty
                                 db.inventoryDao().updateItem(item.copy(quantityAvailable = newQty))
@@ -2100,6 +2076,12 @@ class NetworkRepository(private val db: AppDatabase) {
                                         notes = "استرجاع كميات بسبب حذف/إلغاء الفاتورة ${invoice.invoiceNumber}"
                                     )
                                 )
+                            } else {
+                                val newItem = InventoryItemEntity(
+                                    packageName = pkgName.trim(),
+                                    quantityAvailable = qty
+                                )
+                                db.inventoryDao().insertItem(newItem)
                             }
                         }
                     }
@@ -2231,15 +2213,6 @@ class NetworkRepository(private val db: AppDatabase) {
                     android.util.Log.e("NetworkRepository", "Error voiding header for sales invoice: ${e.message}", e)
                 }
 
-                try {
-                    val cogsHeader = db.journalEntryDao().getHeaderByReference("COGS", invoice.id.toString())
-                    if (cogsHeader != null) {
-                        db.journalEntryDao().voidEntryWithReversal(cogsHeader.id, "إلغاء تكلفة مبيعات الفاتورة وتسوية المخزون", invoice.issuerName.ifBlank { "المهندس حسن" })
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("NetworkRepository", "Error voiding COGS header for sales invoice: ${e.message}", e)
-                }
-
                 val voidedInvoice = invoice.copy(
                     isVoided = true,
                     status = "VOIDED",
@@ -2363,48 +2336,6 @@ class NetworkRepository(private val db: AppDatabase) {
                     salesLines
                 )
 
-                // 2. قيد تكلفة البضاعة المباعة (COGS) ومقابلة المخزون
-                val unitCost = if (item.costPrice > BigDecimal.ZERO) {
-                    item.costPrice
-                } else if (item.wholesalePrice > BigDecimal.ZERO) {
-                    item.wholesalePrice.multiply(BigDecimal("0.5"))
-                } else {
-                    item.retailPrice.multiply(BigDecimal("0.5"))
-                }
-                val totalCogs = unitCost.multiply(BigDecimal.valueOf(quantity.toLong()))
-                if (totalCogs > BigDecimal.ZERO) {
-                    val cogsLines = listOf(
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "5101",
-                            accountName = "تكلفة الكروت المباعة (COGS)",
-                            lineType = "DEBIT",
-                            debit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
-                        ),
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1301",
-                            accountName = "مخزون كروت الشبكة المطبوعة",
-                            lineType = "CREDIT",
-                            credit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
-                        )
-                    )
-                    db.journalEntryDao().postBalancedEntry(
-                        JournalEntryHeaderEntity(
-                            entryNumber = "JE-COGS-$invoiceNumber",
-                            dateMillis = System.currentTimeMillis(),
-                            referenceType = "COGS",
-                            referenceId = invoiceId.toString(),
-                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
-                            createdBy = "مسؤول التوزيع"
-                        ),
-                        cogsLines
-                    )
-                }
             } catch (e: Exception) {
                 android.util.Log.e("NetworkRepository", "Error posting balanced entries for inventory distribution: ${e.message}", e)
             }
@@ -2504,49 +2435,6 @@ class NetworkRepository(private val db: AppDatabase) {
                     salesLines
                 )
 
-                // 2. قيد تكلفة البضاعة المباعة (COGS)
-                val invItem = db.inventoryDao().getItemByPackageName(categoryName)
-                val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
-                    invItem.costPrice
-                } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
-                    invItem.wholesalePrice.multiply(BigDecimal("0.5"))
-                } else {
-                    totalWholesaleDebtBd.divide(BigDecimal.valueOf(countToDistribute.toLong()), 2, RoundingMode.HALF_UP).multiply(BigDecimal("0.5"))
-                }
-                val totalCogs = unitCost.multiply(BigDecimal.valueOf(countToDistribute.toLong()))
-                if (totalCogs > BigDecimal.ZERO) {
-                    val cogsLines = listOf(
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "5101",
-                            accountName = "تكلفة الكروت المباعة (COGS)",
-                            lineType = "DEBIT",
-                            debit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
-                        ),
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1301",
-                            accountName = "مخزون كروت الشبكة المطبوعة",
-                            lineType = "CREDIT",
-                            credit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
-                        )
-                    )
-                    db.journalEntryDao().postBalancedEntry(
-                        JournalEntryHeaderEntity(
-                            entryNumber = "JE-COGS-$invoiceNumber",
-                            dateMillis = System.currentTimeMillis(),
-                            referenceType = "COGS",
-                            referenceId = invoiceId.toString(),
-                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
-                            createdBy = "مسؤول التوزيع"
-                        ),
-                        cogsLines
-                    )
-                }
             } catch (e: Exception) {
                 android.util.Log.e("NetworkRepository", "Error posting balanced entries for batch distribution: ${e.message}", e)
             }
@@ -2678,49 +2566,6 @@ class NetworkRepository(private val db: AppDatabase) {
                     salesLines
                 )
 
-                // 2. قيد تكلفة البضاعة المباعة (COGS Engine) ومقابلة المخزون
-                val invItem = db.inventoryDao().getItemByPackageName(packageEntity.name)
-                val unitCost = if (invItem != null && invItem.costPrice > BigDecimal.ZERO) {
-                    invItem.costPrice
-                } else if (invItem != null && invItem.wholesalePrice > BigDecimal.ZERO) {
-                    invItem.wholesalePrice.multiply(BigDecimal("0.5"))
-                } else {
-                    packageEntity.wholesalePrice.multiply(BigDecimal("0.5"))
-                }
-                val totalCogs = unitCost.multiply(BigDecimal.valueOf(quantity.toLong()))
-                if (totalCogs > BigDecimal.ZERO) {
-                    val cogsLines = listOf(
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "5101",
-                            accountName = "تكلفة الكروت المباعة (COGS)",
-                            lineType = "DEBIT",
-                            debit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "تكلفة كروت مباعة - فاتورة #$invoiceNumber"
-                        ),
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1301",
-                            accountName = "مخزون كروت الشبكة المطبوعة",
-                            lineType = "CREDIT",
-                            credit = totalCogs,
-                            currency = "YER",
-                            lineDescription = "صرف مخزون كروت مباعة - فاتورة #$invoiceNumber"
-                        )
-                    )
-                    db.journalEntryDao().postBalancedEntry(
-                        JournalEntryHeaderEntity(
-                            entryNumber = "JE-COGS-$invoiceNumber",
-                            dateMillis = System.currentTimeMillis(),
-                            referenceType = "COGS",
-                            referenceId = invoiceId.toString(),
-                            description = "تكلفة البضاعة المباعة ومقابلة المخزون - فاتورة #$invoiceNumber",
-                            createdBy = issuerName
-                        ),
-                        cogsLines
-                    )
-                }
             } catch (e: Exception) {
                 android.util.Log.e("NetworkRepository", "Error posting balanced entries for issueCardSalesInvoice: ${e.message}", e)
             }
@@ -2793,6 +2638,7 @@ class NetworkRepository(private val db: AppDatabase) {
     suspend fun createVoucher(
         voucherType: String, // "RECEIPT" or "PAYMENT"
         amount: BigDecimal,
+        currency: String = "YER",
         partyName: String,
         retailerId: Long?,
         category: String,
@@ -2811,6 +2657,7 @@ class NetworkRepository(private val db: AppDatabase) {
                 voucherNumber = voucherNumberGenerated,
                 voucherType = voucherType,
                 amount = amount,
+                currency = currency,
                 partyName = partyName,
                 retailerId = retailerId,
                 invoiceId = invoiceId,
@@ -2915,6 +2762,32 @@ class NetworkRepository(private val db: AppDatabase) {
             id
         }
     }
+
+    suspend fun createVoucher(
+        voucherType: String,
+        amount: Double,
+        currency: String = "YER",
+        partyName: String,
+        retailerId: Long?,
+        category: String,
+        paymentMethod: String,
+        description: String,
+        issuerName: String,
+        invoiceId: Long? = null,
+        invoiceNumber: String = ""
+    ): Long = createVoucher(
+        voucherType = voucherType,
+        amount = BigDecimal.valueOf(amount),
+        currency = currency,
+        partyName = partyName,
+        retailerId = retailerId,
+        category = category,
+        paymentMethod = paymentMethod,
+        description = description,
+        issuerName = issuerName,
+        invoiceId = invoiceId,
+        invoiceNumber = invoiceNumber
+    )
 
     suspend fun deleteVoucher(voucher: FinancialVoucherEntity) = withContext(Dispatchers.IO) {
         voidVoucher(voucher, "إلغاء السند المالي وتسوية مسار التدقيق")
@@ -3835,6 +3708,77 @@ class NetworkRepository(private val db: AppDatabase) {
             totalSalesAmount = salesAmount,
             netBalance = netBalance
         )
+    }
+
+    suspend fun importRetailersBatch(
+        retailersToImport: List<RetailerEntity>,
+        replaceExisting: Boolean = false
+    ): Int = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            if (replaceExisting) {
+                db.retailerDao().deleteAllRetailers()
+            }
+            val existing = db.retailerDao().getRetailersList().associateBy { it.name.trim().lowercase() }
+            var count = 0
+            for (ret in retailersToImport) {
+                val match = existing[ret.name.trim().lowercase()]
+                if (match != null && !replaceExisting) {
+                    db.retailerDao().updateRetailer(ret.copy(id = match.id))
+                } else {
+                    db.retailerDao().insertRetailer(ret.copy(id = 0L))
+                }
+                count++
+            }
+            reconcileAccountingLedgerInternal()
+            count
+        }
+    }
+
+    suspend fun importPurchaseInvoicesBatch(
+        invoicesToImport: List<PurchaseInvoiceEntity>,
+        replaceExisting: Boolean = false
+    ): Int = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            if (replaceExisting) {
+                db.purchaseInvoiceDao().deleteAllInvoices()
+            }
+            val existing = db.purchaseInvoiceDao().getAllInvoices().first().associateBy { it.invoiceNumber.trim().lowercase() }
+            var count = 0
+            for (inv in invoicesToImport) {
+                val match = existing[inv.invoiceNumber.trim().lowercase()]
+                if (match != null && !replaceExisting) {
+                    db.purchaseInvoiceDao().updateInvoice(inv.copy(id = match.id))
+                } else {
+                    db.purchaseInvoiceDao().insertInvoice(inv.copy(id = 0L))
+                }
+                count++
+            }
+            count
+        }
+    }
+
+    suspend fun importSalesInvoicesBatch(
+        invoicesToImport: List<CardSalesInvoiceEntity>,
+        replaceExisting: Boolean = false
+    ): Int = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            if (replaceExisting) {
+                db.cardSalesInvoiceDao().deleteAllInvoices()
+            }
+            val existing = db.cardSalesInvoiceDao().getSalesInvoicesList().associateBy { it.invoiceNumber.trim().lowercase() }
+            var count = 0
+            for (inv in invoicesToImport) {
+                val match = existing[inv.invoiceNumber.trim().lowercase()]
+                if (match != null && !replaceExisting) {
+                    db.cardSalesInvoiceDao().updateInvoice(inv.copy(id = match.id))
+                } else {
+                    db.cardSalesInvoiceDao().insertInvoice(inv.copy(id = 0L))
+                }
+                count++
+            }
+            reconcileAccountingLedgerInternal()
+            count
+        }
     }
 }
 

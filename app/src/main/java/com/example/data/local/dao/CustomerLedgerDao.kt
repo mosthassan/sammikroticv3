@@ -26,11 +26,14 @@ interface CustomerLedgerDao {
     @Query(
         """
         SELECT 
-            COALESCE(SUM(debit), '0') AS totalSales,
-            COALESCE(SUM(credit), '0') AS totalPaid,
-            COALESCE(SUM(debit - credit), '0') AS finalBalance
-        FROM customer_ledger
-        WHERE customerId = :customerId
+            COALESCE(SUM(jel.debit), '0') AS totalSales,
+            COALESCE(SUM(jel.credit), '0') AS totalPaid,
+            COALESCE(SUM(jel.debit - jel.credit), '0') AS finalBalance
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jel.accountCode = '1201'
+          AND jel.partyId = :customerId
         """
     )
     fun getCustomerAccountSummary(customerId: Long): Flow<CustomerAccountSummary>
@@ -38,16 +41,19 @@ interface CustomerLedgerDao {
     @Query(
         """
         SELECT 
-            COALESCE(SUM(debit), '0') AS totalSales,
-            COALESCE(SUM(credit), '0') AS totalPaid,
-            COALESCE(SUM(debit - credit), '0') AS finalBalance
-        FROM customer_ledger
-        WHERE customerId = :customerId
+            COALESCE(SUM(jel.debit), '0') AS totalSales,
+            COALESCE(SUM(jel.credit), '0') AS totalPaid,
+            COALESCE(SUM(jel.debit - jel.credit), '0') AS finalBalance
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jel.accountCode = '1201'
+          AND jel.partyId = :customerId
         """
     )
     fun getAccountSummary(customerId: Long): Flow<CustomerAccountSummary>
 
-    @Query("SELECT * FROM customer_ledger WHERE customerId = :customerId ORDER BY transactionDate DESC")
+    @Query("SELECT * FROM customer_ledger WHERE customerId = :customerId AND referenceId NOT LIKE 'REC-INV-%' AND referenceId NOT LIKE 'INV_PAY_%' ORDER BY transactionDate DESC")
     fun getLedgerForCustomer(customerId: Long): Flow<List<CustomerLedgerEntity>>
 
     @Query("DELETE FROM customer_ledger WHERE referenceId = :referenceId")
@@ -58,6 +64,9 @@ interface CustomerLedgerDao {
 
     @Query("DELETE FROM customer_ledger WHERE customerId = :customerId")
     suspend fun deleteByCustomerId(customerId: Long)
+
+    @Query("DELETE FROM customer_ledger WHERE referenceId LIKE 'REC-INV-%' OR referenceId LIKE 'INV_PAY_%'")
+    suspend fun sanitizeLegacyRecInvLedger()
 
     @Query("DELETE FROM customer_ledger")
     suspend fun deleteAllEntries()

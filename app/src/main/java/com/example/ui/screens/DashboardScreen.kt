@@ -1329,7 +1329,7 @@ fun DashboardScreen(
                         }
 
                         Text(
-                            text = "${if (isReceipt) "+" else "-"}${voucher.amount.toInt()} ريال",
+                            text = "${if (isReceipt) "+" else "-"}${com.example.util.CurrencyHelper.formatAmount(voucher.amount, voucher.currency)}",
                             fontFamily = CairoFontFamily,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 13.sp,

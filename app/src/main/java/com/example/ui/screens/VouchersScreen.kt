@@ -113,6 +113,7 @@ fun VouchersScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedFinanceTab by remember { mutableStateOf(0) }
+    var selectedLedgerAccountCode by remember { mutableStateOf("1101") }
     var showSmartInvoiceScanner by remember { mutableStateOf(false) }
     var invoiceScannerTargetType by remember { mutableStateOf("EXPENSES") }
 
@@ -129,9 +130,12 @@ fun VouchersScreen(
                         modifier = Modifier.tabIndicatorOffset(tabPositions[selectedFinanceTab]),
                         color = when (selectedFinanceTab) {
                             1 -> MikroTikCyan
-                            2 -> AssetPurple
+                            2 -> ReceiptGreen
                             3 -> InvestmentGold
                             4 -> ProfitEmerald
+                            5 -> AssetPurple
+                            6 -> EquityBlue
+                            7 -> Color(0xFF38BDF8)
                             else -> Color(0xFF38BDF8)
                         },
                         height = 3.dp
@@ -141,11 +145,13 @@ fun VouchersScreen(
         ) {
             val tabs = listOf(
                 Triple("السندات والمصروفات", Icons.Default.Receipt, 0),
-                Triple("لوحة التقارير المالية 📊", Icons.Default.Assessment, 1),
-                Triple("فواتير المشتريات (AI)", Icons.Default.AutoAwesome, 2),
-                Triple("الأصول الثابتة (CAPEX)", Icons.Default.Devices, 3),
-                Triple("الشركاء ورأس المال", Icons.Default.Group, 4),
-                Triple("الأرباح والخسائر (P&L)", Icons.Default.Assessment, 5)
+                Triple("لوحة التقارير 📊", Icons.Default.Assessment, 1),
+                Triple("دفتر الأستاذ العام 📖", Icons.Default.AccountBalance, 2),
+                Triple("ميزان المراجعة ⚖️", Icons.Default.Assessment, 3),
+                Triple("الأرباح والخسائر (P&L) 📈", Icons.Default.Assessment, 4),
+                Triple("فواتير المشتريات (AI)", Icons.Default.AutoAwesome, 5),
+                Triple("الأصول الثابتة (CAPEX)", Icons.Default.Devices, 6),
+                Triple("الشركاء ورأس المال", Icons.Default.Group, 7)
             )
 
             tabs.forEach { (title, icon, idx) ->
@@ -169,9 +175,12 @@ fun VouchersScreen(
                             tint = if (isSelected) {
                                 when (idx) {
                                     1 -> MikroTikCyan
-                                    2 -> AssetPurple
+                                    2 -> ReceiptGreen
                                     3 -> InvestmentGold
                                     4 -> ProfitEmerald
+                                    5 -> AssetPurple
+                                    6 -> EquityBlue
+                                    7 -> Color(0xFF38BDF8)
                                     else -> Color(0xFF38BDF8)
                                 }
                             } else TextSecondaryDark,
@@ -192,21 +201,32 @@ fun VouchersScreen(
                 }
             )
             1 -> ReportsDashboardScreen()
-            2 -> PurchaseInvoicesSubScreen(
+            2 -> GeneralLedgerScreen(
+                viewModel = viewModel,
+                initialAccountCode = selectedLedgerAccountCode
+            )
+            3 -> TrialBalanceScreen(
+                viewModel = viewModel,
+                onNavigateToLedger = { accountCode ->
+                    selectedLedgerAccountCode = accountCode
+                    selectedFinanceTab = 2
+                }
+            )
+            4 -> ProfitLossScreen(
+                viewModel = viewModel,
+                onNavigateToAI = { prompt ->
+                    viewModel.consultAi(prompt)
+                }
+            )
+            5 -> PurchaseInvoicesSubScreen(
                 viewModel = viewModel,
                 onOpenScanDialog = { target ->
                     invoiceScannerTargetType = target
                     showSmartInvoiceScanner = true
                 }
             )
-            3 -> AssetsScreen(viewModel = viewModel)
-            4 -> PartnersScreen(viewModel = viewModel)
-            5 -> ProfitLossScreen(
-                viewModel = viewModel,
-                onNavigateToAI = { prompt ->
-                    viewModel.consultAi(prompt)
-                }
-            )
+            6 -> AssetsScreen(viewModel = viewModel)
+            7 -> PartnersScreen(viewModel = viewModel)
         }
     }
 
@@ -249,9 +269,33 @@ fun VouchersListSubScreen(
         }
     }
 
-    val receiptsVal = totalReceipts ?: 0.0
-    val paymentsVal = totalPayments ?: 0.0
-    val netProfit = receiptsVal - paymentsVal
+    val (receiptsVal, paymentsVal, netProfit, summaryCurrency) = remember(filteredVouchers) {
+        val active = filteredVouchers.filter { !it.isVoided }
+        if (active.isEmpty()) {
+            listOf(0.0, 0.0, 0.0, "YER")
+        } else {
+            val distinctCurrencies = active.map { it.currency.uppercase() }.toSet()
+            if (distinctCurrencies.size == 1) {
+                val curr = distinctCurrencies.first()
+                val receipts = active.filter { it.voucherType == "RECEIPT" }.sumOf { it.amount.toDouble() }
+                val payments = active.filter { it.voucherType == "PAYMENT" }.sumOf { it.amount.toDouble() }
+                listOf(receipts, payments, receipts - payments, curr)
+            } else {
+                val receiptsYer = active.filter { it.voucherType == "RECEIPT" }.sumOf { v ->
+                    viewModel.convertToYer(v.amount.toDouble(), v.currency)
+                }
+                val paymentsYer = active.filter { it.voucherType == "PAYMENT" }.sumOf { v ->
+                    viewModel.convertToYer(v.amount.toDouble(), v.currency)
+                }
+                listOf(receiptsYer, paymentsYer, receiptsYer - paymentsYer, "YER")
+            }
+        }
+    }
+
+    val finalReceipts = receiptsVal as Double
+    val finalPayments = paymentsVal as Double
+    val finalNet = netProfit as Double
+    val finalCurr = summaryCurrency as String
 
     Box(modifier = modifier.fillMaxSize().testTag("vouchers_screen")) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -297,22 +341,25 @@ fun VouchersListSubScreen(
             ) {
                 VoucherSummaryCard(
                     title = "إجمالي المقبوضات",
-                    amount = receiptsVal,
+                    amount = finalReceipts,
+                    currency = finalCurr,
                     color = ReceiptGreen,
                     icon = Icons.Default.ArrowDownward,
                     modifier = Modifier.weight(1f)
                 )
                 VoucherSummaryCard(
                     title = "إجمالي المصروفات",
-                    amount = paymentsVal,
+                    amount = finalPayments,
+                    currency = finalCurr,
                     color = PaymentRed,
                     icon = Icons.Default.ArrowUpward,
                     modifier = Modifier.weight(1f)
                 )
                 VoucherSummaryCard(
                     title = "صافي الحركة",
-                    amount = netProfit,
-                    color = if (netProfit >= 0) ReceiptGreen else PaymentRed,
+                    amount = finalNet,
+                    currency = finalCurr,
+                    color = if (finalNet >= 0) ReceiptGreen else PaymentRed,
                     icon = Icons.Default.Receipt,
                     modifier = Modifier.weight(1f)
                 )
@@ -454,12 +501,13 @@ fun VouchersListSubScreen(
                     voucherToClone = null
                     voucherToEdit = null
                 },
-                onSave = { type, amount, party, retailerId, cat, method, desc, shareWhatsApp ->
+                onSave = { type, amount, curr, party, retailerId, cat, method, desc, shareWhatsApp ->
                     if (voucherToEdit != null) {
                         viewModel.updateVoucher(
                             voucherToEdit!!.copy(
                                 voucherType = type,
                                 amount = java.math.BigDecimal.valueOf(amount),
+                                currency = curr,
                                 partyName = party,
                                 retailerId = retailerId,
                                 category = cat,
@@ -476,6 +524,7 @@ fun VouchersListSubScreen(
                         viewModel.createVoucher(
                             voucherType = type,
                             amount = amount,
+                            currency = curr,
                             partyName = party,
                             retailerId = retailerId,
                             category = cat,
@@ -493,6 +542,7 @@ fun VouchersListSubScreen(
                                     voucherNumber = "NEW",
                                     voucherType = type,
                                     amount = java.math.BigDecimal.valueOf(amount),
+                                    currency = curr,
                                     partyName = party,
                                     retailerId = retailerId,
                                     category = cat,
@@ -611,6 +661,7 @@ fun VouchersListSubScreen(
 fun VoucherSummaryCard(
     title: String,
     amount: Double,
+    currency: String = "YER",
     color: Color,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier
@@ -635,17 +686,11 @@ fun VoucherSummaryCard(
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${amount.toInt()}",
+                text = CurrencyHelper.formatAmount(amount, currency),
                 fontFamily = CairoFontFamily,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = color
-            )
-            Text(
-                text = "ريال",
-                fontFamily = CairoFontFamily,
-                fontSize = 10.sp,
-                color = TextSecondaryDark
             )
         }
     }
@@ -708,7 +753,7 @@ fun VoucherItemCard(
                 }
 
                 Text(
-                    text = "${voucher.amount.toInt()} ريال",
+                    text = CurrencyHelper.formatAmount(voucher.amount, voucher.currency),
                     fontFamily = CairoFontFamily,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -835,12 +880,13 @@ fun AddVoucherDialog(
     voucherToClone: FinancialVoucherEntity? = null,
     voucherToEdit: FinancialVoucherEntity? = null,
     onDismiss: () -> Unit,
-    onSave: (String, Double, String, Long?, String, String, String, Boolean) -> Unit
+    onSave: (type: String, amount: Double, currency: String, partyName: String, retailerId: Long?, category: String, paymentMethod: String, description: String, shareWhatsApp: Boolean) -> Unit
 ) {
     val targetVoucher = voucherToEdit ?: voucherToClone
     var isSaving by remember { mutableStateOf(false) }
     var voucherType by remember(targetVoucher) { mutableStateOf(targetVoucher?.voucherType ?: "RECEIPT") } // RECEIPT or PAYMENT
     var amountText by remember(targetVoucher) { mutableStateOf(targetVoucher?.let { it.amount.toInt().toString() } ?: "") }
+    var selectedCurrency by remember(targetVoucher) { mutableStateOf(targetVoucher?.currency ?: "YER") }
     var partyName by remember(targetVoucher) { mutableStateOf(targetVoucher?.partyName ?: "") }
     var selectedRetailerId by remember(targetVoucher) { mutableStateOf<Long?>(targetVoucher?.retailerId) }
     var category by remember(targetVoucher) { mutableStateOf(targetVoucher?.category ?: "توريد مبيعات كروت") }
@@ -896,12 +942,51 @@ fun AddVoucherDialog(
                     }
                 }
 
+                // Currency Selector
+                item {
+                    Column {
+                        Text(
+                            text = "عملة السند المالي:",
+                            fontFamily = CairoFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("YER" to "ريال يمني (ر.ي)", "USD" to "دولار ($)", "SAR" to "سعودي (ر.س)").forEach { (currCode, currLabel) ->
+                                val isSel = selectedCurrency == currCode
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSel) MikroTikPrimary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    border = BorderStroke(1.dp, if (isSel) MikroTikCyan else CyberBorder),
+                                    onClick = { selectedCurrency = currCode },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = currLabel,
+                                        fontFamily = CairoFontFamily,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSel) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Amount
                 item {
                     OutlinedTextField(
                         value = amountText,
                         onValueChange = { amountText = it },
-                        label = { Text("المبلغ بالريال *") },
+                        label = { Text("المبلغ (${CurrencyHelper.getCurrencySymbol(selectedCurrency)}) *") },
                         placeholder = { Text("مثال: 50000") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("voucher_amount_input")
@@ -1077,7 +1162,7 @@ fun AddVoucherDialog(
                     val amt = amountText.toDoubleOrNull() ?: 0.0
                     if (!isSaving && amt > 0 && partyName.isNotBlank()) {
                         isSaving = true
-                        onSave(voucherType, amt, partyName.trim(), selectedRetailerId, category.trim(), paymentMethod.trim(), description.trim(), shareViaWhatsApp)
+                        onSave(voucherType, amt, selectedCurrency, partyName.trim(), selectedRetailerId, category.trim(), paymentMethod.trim(), description.trim(), shareViaWhatsApp)
                     }
                 },
                 enabled = !isSaving && amountText.toDoubleOrNull() != null && partyName.isNotBlank(),
@@ -1180,7 +1265,7 @@ fun VoucherSlipModal(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "المبلغ: ${voucher.amount.toInt()} ريال يمني فقط لا غير",
+                            text = "المبلغ: ${CurrencyHelper.formatAmount(voucher.amount, voucher.currency)} فقط لا غير",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = if (isVoided) Color.Gray else (if (isReceipt) ReceiptGreen else PaymentRed)

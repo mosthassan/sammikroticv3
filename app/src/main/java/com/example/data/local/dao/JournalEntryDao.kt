@@ -18,6 +18,12 @@ import com.example.data.local.model.TrialBalanceRow
 import kotlinx.coroutines.flow.Flow
 import java.math.BigDecimal
 
+data class CustomerStatementSummary(
+    val totalSales: BigDecimal,
+    val totalPaid: BigDecimal,
+    val finalBalance: BigDecimal
+)
+
 @Dao
 interface JournalEntryDao {
 
@@ -160,12 +166,62 @@ interface JournalEntryDao {
             INNER JOIN journal_entry_headers h ON l.headerId = h.id
             WHERE h.status = 'POSTED' AND h.dateMillis BETWEEN :startDate AND :endDate
         ) jel ON coa.accountCode = jel.accountCode
-        WHERE coa.accountType IN ('REVENUE', 'EXPENSE')
+        WHERE coa.accountType IN ('REVENUE', 'EXPENSE') OR coa.accountCode LIKE '4%' OR coa.accountCode LIKE '5%'
         GROUP BY coa.accountCode, coa.accountNameAr, coa.normalBalance, coa.accountType
         ORDER BY coa.accountCode ASC
         """
     )
     fun getIncomeStatementRows(startDate: Long, endDate: Long): Flow<List<IncomeStatementRow>>
+
+    // ==========================================
+    // كشف حساب العميل التفصيلي وسندات التطهير
+    // ==========================================
+
+    @Query(
+        """
+        SELECT 
+            COALESCE(SUM(jel.debit), '0') AS totalSales,
+            COALESCE(SUM(jel.credit), '0') AS totalPaid,
+            COALESCE(SUM(jel.debit - jel.credit), '0') AS finalBalance
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jel.accountCode = '1201'
+          AND jel.partyId = :customerId
+        """
+    )
+    fun getDetailedCustomerStatement(customerId: Long): Flow<CustomerStatementSummary>
+
+    @Query(
+        """
+        SELECT 
+            jel.id AS lineId,
+            jeh.id AS headerId,
+            jeh.entryNumber AS entryNumber,
+            jeh.dateMillis AS dateMillis,
+            jel.accountCode AS accountCode,
+            jel.accountName AS accountName,
+            jel.lineDescription AS lineDescription,
+            jeh.description AS headerDescription,
+            jel.debit AS debit,
+            jel.credit AS credit,
+            jeh.referenceType AS referenceType,
+            jeh.referenceId AS referenceId
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jel.accountCode = '1201'
+          AND jel.partyId = :customerId
+        ORDER BY jeh.dateMillis ASC, jel.id ASC
+        """
+    )
+    fun getDetailedCustomerStatementLines(customerId: Long): Flow<List<GeneralLedgerLineRow>>
+
+    @Query("DELETE FROM journal_entry_lines WHERE headerId IN (SELECT id FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%')")
+    suspend fun sanitizeLegacyRecInvLines()
+
+    @Query("DELETE FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%'")
+    suspend fun sanitizeLegacyRecInvHeaders()
 
     /**
      * ترحيل قيد محاسبي مزدوج متوازن إجبارياً
