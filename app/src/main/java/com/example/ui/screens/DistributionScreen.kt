@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalAtm
@@ -141,6 +142,7 @@ fun DistributionScreen(
     var showQuickPayDialog by remember { mutableStateOf<RetailerEntity?>(null) }
     var retailerToDelete by remember { mutableStateOf<RetailerEntity?>(null) }
     var retailerForWhatsAppMenu by remember { mutableStateOf<RetailerEntity?>(null) }
+    var retailerForStatement by remember { mutableStateOf<RetailerEntity?>(null) }
 
     var isReconciling by remember { mutableStateOf(false) }
     var distributionSubTab by remember { mutableIntStateOf(0) } // 0: نقاط البيع والديون, 1: فواتير المبيعات, 2: مخزن الأصناف بالعدد
@@ -580,6 +582,9 @@ fun DistributionScreen(
                             items(filteredRetailers, key = { it.id }) { retailer ->
                                 RetailerCard(
                                     retailer = retailer,
+                                    onStatement = {
+                                        retailerForStatement = retailer
+                                    },
                                     onCall = {
                                         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${retailer.phone}"))
                                         context.startActivity(intent)
@@ -751,6 +756,14 @@ fun DistributionScreen(
                         }
                     }
                 }
+            )
+        }
+
+        // Customer Statement Detailed Dialog
+        retailerForStatement?.let { r ->
+            CustomerStatementDialog(
+                retailer = r,
+                onDismiss = { retailerForStatement = null }
             )
         }
 
@@ -962,6 +975,7 @@ fun DistributionScreen(
 @Composable
 fun RetailerCard(
     retailer: RetailerEntity,
+    onStatement: () -> Unit = {},
     onCall: () -> Unit,
     onWhatsApp: () -> Unit,
     onClone: () -> Unit,
@@ -979,9 +993,13 @@ fun RetailerCard(
         modifier = Modifier.fillMaxWidth().testTag("retailer_card_${retailer.id}")
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Top: Store Name & Balance
+            // Top: Store Name & Balance (Clickable for Statement)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onStatement() }
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1154,6 +1172,19 @@ fun RetailerCard(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = onStatement,
+                        colors = ButtonDefaults.buttonColors(containerColor = InvestmentGold),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .testTag("retailer_statement_btn_${retailer.id}")
+                    ) {
+                        Icon(Icons.Default.Description, contentDescription = null, tint = Color.Black, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("كشف حساب", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                    }
+
                     Button(
                         onClick = onInvoice,
                         colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
