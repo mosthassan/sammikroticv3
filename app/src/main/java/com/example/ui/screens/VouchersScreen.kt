@@ -64,6 +64,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -259,6 +260,10 @@ fun VouchersListSubScreen(
     var voucherToVoid by remember { mutableStateOf<FinancialVoucherEntity?>(null) }
     var voucherToDelete by remember { mutableStateOf<FinancialVoucherEntity?>(null) }
 
+    LaunchedEffect(Unit) {
+        viewModel.deduplicateVouchers()
+    }
+
     val filterTypes = listOf("الكل", "سندات قبض", "سندات صرف")
 
     val filteredVouchers = vouchers.filter { voucher ->
@@ -319,15 +324,30 @@ fun VouchersListSubScreen(
                     )
                 }
 
-                Button(
-                    onClick = { onOpenScanDialog("EXPENSES") },
-                    colors = ButtonDefaults.buttonColors(containerColor = PaymentRed.copy(alpha = 0.9f)),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.testTag("scan_invoice_vouchers_header_button")
-                ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("مسح فاتورة (AI)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            viewModel.deduplicateVouchers { count ->
+                                val msg = if (count > 0) "تم تنظيف وحذف $count سند مكرر بنجاح ✓" else "جميع السندات فريدة ولا توجد تكرارات ✓"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("deduplicate_vouchers_button")
+                    ) {
+                        Text("إزالة التكرار", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = CairoFontFamily)
+                    }
+
+                    Button(
+                        onClick = { onOpenScanDialog("EXPENSES") },
+                        colors = ButtonDefaults.buttonColors(containerColor = PaymentRed.copy(alpha = 0.9f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("scan_invoice_vouchers_header_button")
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("مسح فاتورة (AI)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
@@ -633,23 +653,31 @@ fun VouchersListSubScreen(
         if (voucherToDelete != null) {
             AlertDialog(
                 onDismissRequest = { voucherToDelete = null },
-                title = { Text("تأكيد حذف السند") },
-                text = { Text("هل أنت متأكد من حذف السند (${voucherToDelete?.voucherNumber})؟") },
+                title = { Text("تأكيد حذف السند نهائياً", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("هل أنت متأكد من حذف السند (${voucherToDelete?.voucherNumber}) نهائياً؟", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
+                        Text("سيتم حذف السند وإزالة قيوده ومزامنة حذفه سحابياً لمنع عودته أبداً.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = CairoFontFamily)
+                    }
+                },
                 confirmButton = {
                     Button(
                         onClick = {
-                            voucherToDelete?.let { viewModel.deleteVoucher(it) }
+                            voucherToDelete?.let { v ->
+                                viewModel.deleteVoucher(v) {
+                                    Toast.makeText(context, "تم حذف السند نهائياً وتنظيف السجلات ✓", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                             voucherToDelete = null
-                            Toast.makeText(context, "تم حذف السند", Toast.LENGTH_SHORT).show()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = PaymentRed)
                     ) {
-                        Text("حذف")
+                        Text("تأكيد الحذف", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { voucherToDelete = null }) {
-                        Text("إلغاء")
+                        Text("إلغاء", fontFamily = CairoFontFamily)
                     }
                 }
             )

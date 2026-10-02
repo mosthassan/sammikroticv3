@@ -2640,7 +2640,89 @@ class NetworkRepository(private val db: AppDatabase) {
     )
 
     suspend fun deleteVoucher(voucher: FinancialVoucherEntity) = withContext(Dispatchers.IO) {
-        voidVoucher(voucher, "إلغاء السند المالي وتسوية مسار التدقيق")
+        db.withTransaction {
+            // 1. حذف السند الفعلي نهائياً من قاعدة البيانات المحلية لمنع تكراره
+            db.financialVoucherDao().deleteVoucher(voucher)
+            db.financialVoucherDao().deleteVoucherById(voucher.id)
+
+            // 2. تنظيف حركات أستاذ العميل / البقالة للسند المحذوف
+            db.customerLedgerDao().deleteByReferenceId(voucher.id.toString())
+            if (voucher.voucherNumber.isNotBlank()) {
+                db.customerLedgerDao().deleteByReferenceId(voucher.voucherNumber)
+                
+                // 3. حذف وإلغاء أي قيود محاسبية مسجلة أو قيود عكسية سابقة لهذا السند المحذوف
+                db.journalEntryDao().purgeJournalEntriesByReference("FINANCIAL_VOUCHER", voucher.voucherNumber)
+                
+                // 4. تسجيل رقم السند في سجل المحذوفات الدائم لمنع استعادته عبر المزامنة السحابية
+                com.example.data.local.DeletedRecordsTracker.markVoucherDeleted(voucher.voucherNumber)
+            }
+
+            // 5. إعادة ضبط واحتساب أرصدة الحسابات ومطابقتها فورياً
+            reconcileAccountingLedgerInternal()
+        }
+    }
+
+    suspend fun deduplicateVouchers(): Int = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            val all = db.financialVoucherDao().getVouchersList()
+            val seenNumbers = mutableMapOf<String, FinancialVoucherEntity>()
+            val seenSignatures = mutableMapOf<String, FinancialVoucherEntity>()
+            val toDelete = mutableListOf<FinancialVoucherEntity>()
+
+            for (v in all) {
+                val numKey = v.voucherNumber.trim().uppercase()
+                val sigKey = "${v.voucherType.trim()}_${v.amount}_${v.partyName.trim()}_${v.retailerId}_${v.dateMillis}"
+
+                var isDuplicate = false
+                if (numKey.isNotBlank()) {
+                    if (seenNumbers.containsKey(numKey)) {
+                        val existing = seenNumbers[numKey]!!
+                        if (existing.isVoided && !v.isVoided) {
+                            toDelete.add(existing)
+                            seenNumbers[numKey] = v
+                        } else {
+                            toDelete.add(v)
+                        }
+                        isDuplicate = true
+                    } else {
+                        seenNumbers[numKey] = v
+                    }
+                }
+
+                if (!isDuplicate) {
+                    if (seenSignatures.containsKey(sigKey)) {
+                        val existing = seenSignatures[sigKey]!!
+                        if (existing.isVoided && !v.isVoided) {
+                            toDelete.add(existing)
+                            seenSignatures[sigKey] = v
+                        } else {
+                            toDelete.add(v)
+                        }
+                    } else {
+                        seenSignatures[sigKey] = v
+                    }
+                }
+            }
+
+            for (dup in toDelete) {
+                db.financialVoucherDao().deleteVoucher(dup)
+                db.financialVoucherDao().deleteVoucherById(dup.id)
+                db.customerLedgerDao().deleteByReferenceId(dup.id.toString())
+                if (dup.voucherNumber.isNotBlank()) {
+                    db.customerLedgerDao().deleteByReferenceId(dup.voucherNumber)
+                    val remaining = all.count { it.id != dup.id && it.voucherNumber.trim().equals(dup.voucherNumber.trim(), ignoreCase = true) }
+                    if (remaining == 0) {
+                        db.journalEntryDao().purgeJournalEntriesByReference("FINANCIAL_VOUCHER", dup.voucherNumber)
+                    }
+                }
+            }
+
+            if (toDelete.isNotEmpty()) {
+                android.util.Log.i("NetworkRepository", "Deduplicated ${toDelete.size} duplicate vouchers")
+                reconcileAccountingLedgerInternal()
+            }
+            toDelete.size
+        }
     }
 
     suspend fun updateVoucher(voucher: FinancialVoucherEntity) = withContext(Dispatchers.IO) {
@@ -3435,10 +3517,16 @@ class NetworkRepository(private val db: AppDatabase) {
         val existingVouchNums = existingVouchers.associateBy { it.voucherNumber.trim() }
 
         for (voucher in cloudData.vouchers) {
-            val match = existingVouchNums[voucher.voucherNumber.trim()]
+            val vNum = voucher.voucherNumber.trim()
+            if (vNum.isBlank() || com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(vNum)) {
+                // تجاهل أي سند تم حذفه مسبقاً محلياً لمنع إعادته
+                continue
+            }
+            val match = existingVouchNums[vNum]
             if (match != null) {
+                val preservedVoid = match.isVoided || voucher.isVoided
                 db.financialVoucherDao().updateVoucher(
-                    voucher.copy(id = match.id)
+                    voucher.copy(id = match.id, isVoided = preservedVoid)
                 )
             } else {
                 db.financialVoucherDao().insertVoucher(
@@ -3446,6 +3534,7 @@ class NetworkRepository(private val db: AppDatabase) {
                 )
             }
         }
+        deduplicateVouchers()
 
         // 5. Restore Card Packages
         val existingPackages = db.cardPackageDao().getAllPackages().first()

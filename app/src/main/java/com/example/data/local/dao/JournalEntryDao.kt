@@ -239,6 +239,28 @@ interface JournalEntryDao {
     @Query("DELETE FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%'")
     suspend fun sanitizeLegacyRecInvHeaders()
 
+    @Query("DELETE FROM journal_entry_lines WHERE headerId IN (SELECT id FROM journal_entry_headers WHERE (referenceType = :refType AND referenceId = :refId) OR entryNumber = :refId OR referenceId = :refId)")
+    suspend fun deleteLinesByReference(refType: String, refId: String)
+
+    @Query("DELETE FROM journal_entry_headers WHERE (referenceType = :refType AND referenceId = :refId) OR entryNumber = :refId OR referenceId = :refId")
+    suspend fun deleteHeadersByReference(refType: String, refId: String)
+
+    @Query("DELETE FROM journal_entries WHERE (referenceType = :refType AND referenceId = :refId) OR entryNumber = :refId OR referenceId = :refId")
+    suspend fun deleteLegacyEntriesByReference(refType: String, refId: String)
+
+    @Transaction
+    suspend fun purgeJournalEntriesByReference(refType: String, refId: String) {
+        deleteLinesByReference(refType, refId)
+        deleteHeadersByReference(refType, refId)
+        deleteLegacyEntriesByReference(refType, refId)
+        deleteLinesByReference("VOID_VOUCHER", refId)
+        deleteHeadersByReference("VOID_VOUCHER", refId)
+        deleteLegacyEntriesByReference("VOID_VOUCHER", refId)
+        deleteLinesByReference("VOID_VOUCHER", "REV-$refId")
+        deleteHeadersByReference("VOID_VOUCHER", "REV-$refId")
+        deleteLegacyEntriesByReference("VOID_VOUCHER", "REV-$refId")
+    }
+
     /**
      * ترحيل قيد محاسبي مزدوج متوازن إجبارياً
      * شرط التحقق: SUM(Debit) == SUM(Credit)

@@ -9,6 +9,8 @@ class SamMikrotikApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         
+        com.example.data.local.DeletedRecordsTracker.init(this)
+
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 FirebaseApp.initializeApp(this)

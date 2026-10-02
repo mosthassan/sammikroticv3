@@ -32,6 +32,9 @@ interface FinancialVoucherDao {
     @Delete
     suspend fun deleteVoucher(voucher: FinancialVoucherEntity)
 
+    @Query("DELETE FROM financial_vouchers WHERE id = :id")
+    suspend fun deleteVoucherById(id: Long)
+
     @Query("SELECT * FROM financial_vouchers ORDER BY dateMillis DESC")
     suspend fun getVouchersList(): List<FinancialVoucherEntity>
 

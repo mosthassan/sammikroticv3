@@ -284,11 +284,14 @@ class FirebaseDbService {
 
             // Upload vouchers
             if (vouchRef != null) {
+                val activeLocalNumbers = mutableSetOf<String>()
                 for (voucher in vouchers) {
-                    if (voucher.voucherNumber.startsWith("REC-INV-")) {
-                        continue // NEVER upload legacy REC-INV- vouchers
+                    val vNum = voucher.voucherNumber.trim()
+                    if (vNum.startsWith("REC-INV-") || com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(vNum)) {
+                        continue // NEVER upload legacy REC-INV- vouchers or deleted vouchers
                     }
-                    val docRef = vouchRef.document(voucher.voucherNumber)
+                    activeLocalNumbers.add(vNum)
+                    val docRef = vouchRef.document(vNum)
                     val data = mapOf(
                         "id" to voucher.id,
                         "voucherNumber" to voucher.voucherNumber,
@@ -303,10 +306,27 @@ class FirebaseDbService {
                         "dateMillis" to voucher.dateMillis,
                         "issuerName" to voucher.issuerName,
                         "notes" to voucher.notes,
+                        "isVoided" to voucher.isVoided,
                         "ownerEmail" to (userEmail ?: "public")
                     )
                     setDocAsync(docRef, data)
                     syncedVouchers++
+                }
+
+                // حذف السندات المحذوفة محلياً من السحابة لضمان عدم عودتها أبداً
+                try {
+                    val remoteDocs = getCollectionAsync(vouchRef)
+                    remoteDocs?.documents?.forEach { rDoc ->
+                        val remoteNum = (rDoc.getString("voucherNumber") ?: rDoc.id).trim()
+                        if (remoteNum.startsWith("REC-INV-") ||
+                            com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(remoteNum) ||
+                            (!activeLocalNumbers.contains(remoteNum) && vouchers.isNotEmpty())
+                        ) {
+                            deleteDocAsync(rDoc.reference)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Pruning deleted vouchers note: ${e.message}")
                 }
             }
 
@@ -517,9 +537,37 @@ class FirebaseDbService {
     }
 
     suspend fun deleteVoucher(voucherNumber: String, userEmail: String? = null): Boolean = withContext(Dispatchers.IO) {
+        val cleanNum = voucherNumber.trim()
+        if (cleanNum.isBlank()) return@withContext false
+        com.example.data.local.DeletedRecordsTracker.markVoucherDeleted(cleanNum)
         try {
-            val docRef = getVouchersRef(userEmail)?.document(voucherNumber) ?: return@withContext false
-            deleteDocAsync(docRef)
+            val userDocRef = getVouchersRef(userEmail)?.document(cleanNum)
+            if (userDocRef != null) deleteDocAsync(userDocRef)
+
+            val globalDocRef = firestore?.collection("vouchers")?.document(cleanNum)
+            if (globalDocRef != null) deleteDocAsync(globalDocRef)
+
+            // تنظيف أي وثائق فرعية في حال كان المعرف مختلفاً عن رقم السند
+            val userCol = getVouchersRef(userEmail)
+            if (userCol != null) {
+                val snap = getCollectionAsync(userCol)
+                snap?.documents?.forEach { doc ->
+                    val num = (doc.getString("voucherNumber") ?: doc.id).trim()
+                    if (num.equals(cleanNum, ignoreCase = true)) {
+                        deleteDocAsync(doc.reference)
+                    }
+                }
+            }
+            val fs = firestore
+            if (fs != null) {
+                val gSnap = getCollectionAsync(fs.collection("vouchers"))
+                gSnap?.documents?.forEach { doc ->
+                    val num = (doc.getString("voucherNumber") ?: doc.id).trim()
+                    if (num.equals(cleanNum, ignoreCase = true)) {
+                        deleteDocAsync(doc.reference)
+                    }
+                }
+            }
             true
         } catch (e: Exception) {
             Log.e(tag, "Error deleting voucher from Firestore", e)
@@ -776,11 +824,17 @@ class FirebaseDbService {
         // 4. Fetch Vouchers
         try {
             readCollections(getVouchersRef(userEmail), fs.collection("vouchers")) { doc ->
-                val vNumber = doc.getString("voucherNumber") ?: doc.id
+                val vNumber = (doc.getString("voucherNumber") ?: doc.id).trim()
                 if (vNumber.startsWith("REC-INV-") || doc.id.startsWith("REC-INV-")) {
                     try { doc.reference.delete() } catch (_: Exception) {}
                     return@readCollections
                 }
+                // التحقق مما إذا كان السند قد تم حذفه مسبقاً لمنع استعادته وحذفه من السحابة فوراً
+                if (com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(vNumber)) {
+                    try { doc.reference.delete() } catch (_: Exception) {}
+                    return@readCollections
+                }
+                val isVoided = doc.getBoolean("isVoided") ?: false
                 val vCurrency = doc.getString("currency") ?: "YER"
                 pulledVouchers[vNumber] = FinancialVoucherEntity(
                     id = doc.getLong("id") ?: 0L,
@@ -795,7 +849,8 @@ class FirebaseDbService {
                     description = doc.getString("description") ?: "",
                     dateMillis = doc.getLong("dateMillis") ?: System.currentTimeMillis(),
                     issuerName = doc.getString("issuerName") ?: "المهندس حسن",
-                    notes = doc.getString("notes") ?: ""
+                    notes = doc.getString("notes") ?: "",
+                    isVoided = isVoided
                 )
             }
         } catch (e: Exception) {

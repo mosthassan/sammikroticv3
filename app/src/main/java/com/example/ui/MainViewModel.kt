@@ -1261,14 +1261,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteVoucher(voucher: FinancialVoucherEntity) {
+    fun deleteVoucher(voucher: FinancialVoucherEntity, onComplete: () -> Unit = {}) {
+        onComplete()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 repository.deleteVoucher(voucher)
-                val userEmail = _currentUser.value?.email?.takeIf { it.isNotBlank() }
+                val userEmail = _currentUser.value?.email?.takeIf { it.isNotBlank() } ?: authManager.getActiveEmail()
                 firebaseService.deleteVoucher(voucher.voucherNumber, userEmail)
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error deleting voucher in background", e)
+            }
+        }
+    }
+
+    fun deduplicateVouchers(onComplete: (Int) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val count = repository.deduplicateVouchers()
+                withContext(Dispatchers.Main) {
+                    onComplete(count)
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error deduplicating vouchers", e)
+                withContext(Dispatchers.Main) {
+                    onComplete(0)
+                }
             }
         }
     }
@@ -1666,6 +1683,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _syncStatus.value = "جارٍ المزامنة التفاعلية مع السحابة ($targetLabel)..."
 
             try {
+                // مزامنة حذف السندات المحذوفة محلياً أولاً لضمان عدم استعادتها
+                val deletedVouchers = com.example.data.local.DeletedRecordsTracker.getAllDeletedVouchers()
+                for (vNum in deletedVouchers) {
+                    firebaseService.deleteVoucher(vNum, userEmail)
+                }
+
+                // تنظيف التكرارات المحلية قبل المزامنة
+                repository.deduplicateVouchers()
+
                 // الخطوة 1: سحب أي بيانات مخزنة بالسحابة (مهم جداً للهواتف الجديدة أو الأجهزة المتعددة)
                 val cloudData = firebaseService.pullFromCloud(userEmail)
                 repository.restoreFromCloudData(cloudData)
