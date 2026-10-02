@@ -32,6 +32,7 @@ import com.example.data.local.model.GeneralLedgerItem
 import com.example.data.local.model.GeneralLedgerReport
 import com.example.ui.MainViewModel
 import com.example.ui.theme.*
+import com.example.util.toCleanCurrency
 import java.math.BigDecimal
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
@@ -182,13 +183,13 @@ fun GeneralLedgerScreen(
                                     appendLine("=== دفتر الأستاذ العام ===")
                                     appendLine("الحساب: ${r.accountCode} - ${r.accountName} (${r.normalBalance})")
                                     appendLine("الفترة: ${periodOptions[selectedPeriodIndex]}")
-                                    appendLine("الرصيد الافتتاحي: ${df.format(r.openingBalance)} ر.ي")
-                                    appendLine("إجمالي حركة المدين: ${df.format(r.totalPeriodDebit)} ر.ي")
-                                    appendLine("إجمالي حركة الدائن: ${df.format(r.totalPeriodCredit)} ر.ي")
-                                    appendLine("الرصيد الختامي: ${df.format(r.closingBalance)} ر.ي")
+                                    appendLine("الرصيد الافتتاحي: ${r.openingBalance.toCleanCurrency("YER")}")
+                                    appendLine("إجمالي حركة المدين: ${r.totalPeriodDebit.toCleanCurrency("YER")}")
+                                    appendLine("إجمالي حركة الدائن: ${r.totalPeriodCredit.toCleanCurrency("YER")}")
+                                    appendLine("الرصيد الختامي: ${r.closingBalance.toCleanCurrency("YER")}")
                                     appendLine("---------------------------------------")
                                     r.lines.forEach {
-                                        appendLine("${dateFormat.format(Date(it.dateMillis))} | ${it.entryNumber} | ${it.description} | مدين: ${df.format(it.debit)} | دائن: ${df.format(it.credit)} | الرصيد: ${df.format(it.runningBalance)}")
+                                        appendLine("${dateFormat.format(Date(it.dateMillis))} | ${it.entryNumber} | ${it.description} | مدين: ${it.debit.toCleanCurrency("YER")} | دائن: ${it.credit.toCleanCurrency("YER")} | الرصيد: ${it.runningBalance.toCleanCurrency("YER")}")
                                     }
                                 }
                                 clipboardManager.setText(AnnotatedString(text))
@@ -237,7 +238,6 @@ fun GeneralLedgerScreen(
                                 isAccountDropdownExpanded = true
                             },
                             label = { Text("بحث برقم أو اسم الحساب", fontFamily = CairoFontFamily, fontSize = 11.5.sp) },
-                            leadingIcon = { Icon(Icons.Default.AccountBalance, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(18.dp)) },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isAccountDropdownExpanded) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
@@ -438,26 +438,56 @@ fun GeneralLedgerScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Column {
-                                    Text("الرصيد الافتتاحي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
-                                    Text("${df.format(report.openingBalance)} ر.ي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
-                                }
-                                Column {
-                                    Text("إجمالي المدين (+)", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
-                                    Text("${df.format(report.totalPeriodDebit)} ر.ي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = ReceiptGreen)
-                                }
-                                Column {
-                                    Text("إجمالي الدائن (-)", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
-                                    Text("${df.format(report.totalPeriodCredit)} ر.ي", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF38BDF8))
-                                }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text("الرصيد الختامي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("الرصيد الافتتاحي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark, maxLines = 1)
                                     Text(
-                                        "${df.format(report.closingBalance)} ر.ي",
+                                        text = report.openingBalance.toCleanCurrency("YER"),
                                         fontFamily = CairoFontFamily,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        color = if (report.closingBalance >= BigDecimal.ZERO) ProfitEmerald else PaymentRed
+                                        fontSize = 12.5.sp,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("إجمالي المدين (+)", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark, maxLines = 1)
+                                    Text(
+                                        text = report.totalPeriodDebit.toCleanCurrency("YER"),
+                                        fontFamily = CairoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.5.sp,
+                                        color = ReceiptGreen,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("إجمالي الدائن (-)", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark, maxLines = 1)
+                                    Text(
+                                        text = report.totalPeriodCredit.toCleanCurrency("YER"),
+                                        fontFamily = CairoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.5.sp,
+                                        color = Color(0xFF38BDF8),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1.1f), horizontalAlignment = Alignment.End) {
+                                    Text("الرصيد الختامي", fontFamily = CairoFontFamily, fontSize = 11.sp, color = TextSecondaryDark, maxLines = 1)
+                                    Text(
+                                        text = report.closingBalance.toCleanCurrency("YER"),
+                                        fontFamily = CairoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = if (report.closingBalance >= BigDecimal.ZERO) ProfitEmerald else PaymentRed,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
@@ -626,7 +656,7 @@ fun GeneralLedgerMovementCard(
                 if (item.debit > BigDecimal.ZERO) {
                     Column {
                         Text("مدين (Debit)", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
-                        Text("+${df.format(item.debit)}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ReceiptGreen)
+                        Text("+${item.debit.toCleanCurrency("YER")}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ReceiptGreen, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Column {
@@ -638,7 +668,7 @@ fun GeneralLedgerMovementCard(
                 if (item.credit > BigDecimal.ZERO) {
                     Column {
                         Text("دائن (Credit)", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
-                        Text("-${df.format(item.credit)}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8))
+                        Text("-${item.credit.toCleanCurrency("YER")}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Column {
@@ -650,11 +680,14 @@ fun GeneralLedgerMovementCard(
                 Column(horizontalAlignment = Alignment.End) {
                     Text("الرصيد التراكمي", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
                     Text(
-                        "${df.format(item.runningBalance)} ر.ي",
+                        item.runningBalance.toCleanCurrency("YER"),
                         fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 12.5.sp,
-                        color = ProfitEmerald
+                        fontSize = 12.sp,
+                        color = ProfitEmerald,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

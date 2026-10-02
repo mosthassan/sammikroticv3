@@ -463,50 +463,28 @@ fun VouchersListSubScreen(
             }
         }
 
-        // Dual FABs: AI Scan Invoice & Issue Financial Voucher
-        Row(
+        // FAB: Issue Financial Voucher
+        FloatingActionButton(
+            onClick = {
+                voucherToClone = null
+                voucherToEdit = null
+                showAddDialog = true
+            },
+            containerColor = MikroTikPrimary,
+            contentColor = Color.White,
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(20.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(20.dp)
+                .testTag("add_voucher_fab")
         ) {
-            FloatingActionButton(
-                onClick = { onOpenScanDialog("EXPENSES") },
-                containerColor = PaymentRed,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.testTag("fab_scan_invoice_vouchers")
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("مسح فاتورة (AI)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            }
-
-            FloatingActionButton(
-                onClick = {
-                    voucherToClone = null
-                    voucherToEdit = null
-                    showAddDialog = true
-                },
-                containerColor = MikroTikPrimary,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.testTag("add_voucher_fab")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "إصدار سند")
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("إصدار سند مالي", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
+                Icon(Icons.Default.Add, contentDescription = "إصدار سند")
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("إصدار سند مالي", fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
 
@@ -709,16 +687,21 @@ fun VoucherSummaryCard(
                     text = title,
                     fontFamily = CairoFontFamily,
                     fontSize = 11.sp,
-                    color = TextSecondaryDark
+                    color = TextSecondaryDark,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = CurrencyHelper.formatAmount(amount, currency),
+                text = amount.toCleanCurrency(currency),
                 fontFamily = CairoFontFamily,
-                fontSize = 16.sp,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = color
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
     }
@@ -781,11 +764,14 @@ fun VoucherItemCard(
                 }
 
                 Text(
-                    text = CurrencyHelper.formatAmount(voucher.amount, voucher.currency),
+                    text = voucher.amount.toCleanCurrency(voucher.currency),
                     fontFamily = CairoFontFamily,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isVoided) Color.Gray else badgeColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     style = if (isVoided) androidx.compose.ui.text.TextStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough) else androidx.compose.ui.text.TextStyle.Default
                 )
             }
@@ -1293,7 +1279,7 @@ fun VoucherSlipModal(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "المبلغ: ${CurrencyHelper.formatAmount(voucher.amount, voucher.currency)} فقط لا غير",
+                            text = "المبلغ: ${voucher.amount.toCleanCurrency(voucher.currency)} فقط لا غير",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = if (isVoided) Color.Gray else (if (isReceipt) ReceiptGreen else PaymentRed)
@@ -1329,7 +1315,7 @@ fun VoucherSlipModal(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("إجمالي الرصيد التراكمي المتبقي:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MikroTikNavy)
-                            Text("${retailer.balanceOwed.toInt()} ريال", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = PaymentRed)
+                            Text(retailer.balanceOwed.toCleanCurrency("YER"), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = PaymentRed)
                         }
                     }
 

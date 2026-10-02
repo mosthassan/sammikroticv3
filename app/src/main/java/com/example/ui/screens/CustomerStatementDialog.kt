@@ -87,6 +87,7 @@ import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.WhatsAppDarkGreen
 import com.example.ui.theme.WhatsAppGreen
 import com.example.util.WhatsAppHelper
+import com.example.util.toCleanCurrency
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -269,11 +270,14 @@ private fun StatementHeader(
                 color = TextSecondaryDark
             )
             Text(
-                text = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(finalBalance.toLong())} ر.ي",
+                text = finalBalance.toCleanCurrency("YER"),
                 fontFamily = CairoFontFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
-                color = if (finalBalance > BigDecimal.ZERO) StatusWarning else StatusOnline
+                color = if (finalBalance > BigDecimal.ZERO) StatusWarning else StatusOnline,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
@@ -313,7 +317,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "إجمالي المبيعات (+)",
-            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(totalSales.toLong())} ر.ي",
+            amount = totalSales.toCleanCurrency("YER"),
             icon = Icons.Default.ArrowUpward,
             iconTint = StatusWarning,
             containerColor = StatusWarning.copy(alpha = 0.08f),
@@ -324,7 +328,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "إجمالي المسدد (-)",
-            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(totalPaid.toLong())} ر.ي",
+            amount = totalPaid.toCleanCurrency("YER"),
             icon = Icons.Default.ArrowDownward,
             iconTint = ReceiptGreen,
             containerColor = ReceiptGreen.copy(alpha = 0.08f),
@@ -335,7 +339,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "صافي المتبقي",
-            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(finalBalance.toLong())} ر.ي",
+            amount = finalBalance.toCleanCurrency("YER"),
             icon = Icons.Default.AccountBalanceWallet,
             iconTint = if (finalBalance > BigDecimal.ZERO) MikroTikCyan else StatusOnline,
             containerColor = (if (finalBalance > BigDecimal.ZERO) MikroTikCyan else StatusOnline).copy(alpha = 0.08f),
@@ -531,23 +535,29 @@ private fun StatementRowItem(
 
             // Col 3: Debit
             Text(
-                text = if (line.debit > BigDecimal.ZERO) "${line.debit.toInt()}" else "-",
+                text = if (line.debit > BigDecimal.ZERO) line.debit.toCleanCurrency("YER") else "-",
                 fontFamily = CairoFontFamily,
                 fontWeight = if (line.debit > BigDecimal.ZERO) FontWeight.Bold else FontWeight.Normal,
-                fontSize = 11.5.sp,
+                fontSize = 11.sp,
                 color = if (line.debit > BigDecimal.ZERO) StatusWarning else TextSecondaryDark,
                 textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1.1f)
             )
 
             // Col 4: Credit
             Text(
-                text = if (line.credit > BigDecimal.ZERO) "${line.credit.toInt()}" else "-",
+                text = if (line.credit > BigDecimal.ZERO) line.credit.toCleanCurrency("YER") else "-",
                 fontFamily = CairoFontFamily,
                 fontWeight = if (line.credit > BigDecimal.ZERO) FontWeight.Bold else FontWeight.Normal,
-                fontSize = 11.5.sp,
+                fontSize = 11.sp,
                 color = if (line.credit > BigDecimal.ZERO) ReceiptGreen else TextSecondaryDark,
                 textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1.1f)
             )
 
@@ -557,11 +567,14 @@ private fun StatementRowItem(
                 modifier = Modifier.weight(1.2f)
             ) {
                 Text(
-                    text = "${runningBalance.toInt()}",
+                    text = runningBalance.toCleanCurrency("YER"),
                     fontFamily = CairoFontFamily,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 11.5.sp,
-                    color = if (runningBalance > BigDecimal.ZERO) StatusWarning else StatusOnline
+                    fontSize = 11.sp,
+                    color = if (runningBalance > BigDecimal.ZERO) StatusWarning else StatusOnline,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = if (runningBalance > BigDecimal.ZERO) "متبقي" else "مسدد",
@@ -706,16 +719,16 @@ private fun generateWhatsAppStatementText(
         for (line in recentLines) {
             running = running.add(line.debit).subtract(line.credit)
             val dStr = SimpleDateFormat("MM/dd", Locale.getDefault()).format(Date(line.dateMillis))
-            val typeStr = if (line.debit > BigDecimal.ZERO) "فاتورة (+${line.debit.toInt()})" else "سداد (-${line.credit.toInt()})"
+            val typeStr = if (line.debit > BigDecimal.ZERO) "فاتورة (+${line.debit.toCleanCurrency("YER")})" else "سداد (-${line.credit.toCleanCurrency("YER")})"
             val ref = line.referenceId.ifBlank { line.entryNumber }
-            builder.appendLine("• $dStr | $typeStr | #$ref | الرصيد: ${running.toInt()} ر.ي")
+            builder.appendLine("• $dStr | $typeStr | #$ref | الرصيد: ${running.toCleanCurrency("YER")}")
         }
     }
 
     builder.appendLine("━━━━━━━━━━━━━━━━━━━━━━━━━")
-    builder.appendLine("📈 *إجمالي المبيعات:* ${summary.totalSales.toInt()} ريال")
-    builder.appendLine("💵 *إجمالي المسدد:* ${summary.totalPaid.toInt()} ريال")
-    builder.appendLine("⚖️ *الرصيد المستحق الحالي:* ${summary.finalBalance.toInt()} ريال")
+    builder.appendLine("📈 *إجمالي المبيعات:* ${summary.totalSales.toCleanCurrency("YER")}")
+    builder.appendLine("💵 *إجمالي المسدد:* ${summary.totalPaid.toCleanCurrency("YER")}")
+    builder.appendLine("⚖️ *الرصيد المستحق الحالي:* ${summary.finalBalance.toCleanCurrency("YER")}")
     builder.appendLine("━━━━━━━━━━━━━━━━━━━━━━━━━")
     builder.appendLine("📞 *لأي استفسار يرجى التواصل على:* ${WhatsAppHelper.NETWORK_SUPPORT_PHONE}")
     builder.appendLine("شكراً لتعاملكم معنا 🙏")

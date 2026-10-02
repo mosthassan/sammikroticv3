@@ -109,6 +109,8 @@ import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.WhatsAppDarkGreen
 import com.example.ui.theme.WhatsAppGreen
 import com.example.util.WhatsAppHelper
+import com.example.util.toCleanCurrency
+import java.math.BigDecimal
 
 @Composable
 fun CustomersListScreen(
@@ -161,11 +163,11 @@ fun DistributionScreen(
         val nonSyntheticInvoices = salesInvoices.filter { !it.invoiceNumber.startsWith("INV-DELIV-") }
         retailers.map { r ->
             // استخراج الرصيد الحقيقي الدقيق من واقع قيود الأستاذ العام لحساب 1201
-            val trueGlBalance = customerGlBalances[r.id] ?: r.balanceOwed
+            val trueGlBalance = customerGlBalances[r.id] ?: BigDecimal.ZERO
             val matchingInvoices = nonSyntheticInvoices.filter {
                 it.retailerId == r.id || it.customerName.trim().equals(r.name.trim(), ignoreCase = true)
             }
-            val cardsFromInvoices = matchingInvoices.filter { it.remainingAmount.compareTo(java.math.BigDecimal("0.01")) > 0 }.sumOf { it.totalCardsCount }
+            val cardsFromInvoices = matchingInvoices.filter { it.remainingAmount.compareTo(BigDecimal("0.01")) > 0 }.sumOf { it.totalCardsCount }
             val activeCards = if (cardsFromInvoices > 0) cardsFromInvoices else r.activeCardsCount
 
             r.copy(
@@ -191,7 +193,13 @@ fun DistributionScreen(
         }
     }
 
-    val totalDebt = dynamicRetailers.sumOf { it.balanceOwedDouble }
+    // احتساب إجمالي ديون المحلات الحقيقية ديناميكياً من حساب 1201 بدون الاعتماد على رصيد ثابت موروث
+    val totalShopsDebt = remember(retailers, customerGlBalances) {
+        retailers.fold(BigDecimal.ZERO) { sum, r ->
+            val bal = customerGlBalances[r.id] ?: BigDecimal.ZERO
+            sum.add(bal.coerceAtLeast(BigDecimal.ZERO))
+        }
+    }
     val totalActiveCardsWithRetailers = dynamicRetailers.sumOf { it.activeCardsCount }
 
     Box(modifier = modifier.fillMaxSize().testTag("distribution_screen")) {
@@ -512,11 +520,15 @@ fun DistributionScreen(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "${totalDebt.toInt()} ريال",
+                                    text = totalShopsDebt.toCleanCurrency("YER"),
                                     fontFamily = CairoFontFamily,
-                                    fontSize = 19.sp,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = StatusWarning
+                                    color = StatusWarning,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -565,10 +577,11 @@ fun DistributionScreen(
                     } else {
                         LazyColumn(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
+                            contentPadding = PaddingValues(bottom = 80.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             items(filteredRetailers, key = { it.id }) { retailer ->
-                                val trueGlBalance = customerGlBalances[retailer.id] ?: retailer.balanceOwed
+                                val trueGlBalance = customerGlBalances[retailer.id] ?: BigDecimal.ZERO
                                 RetailerCard(
                                     retailer = retailer,
                                     trueBalance = trueGlBalance,
@@ -978,7 +991,6 @@ fun RetailerCard(
     onDelete: () -> Unit
 ) {
     val balanceToDisplay = trueBalance ?: retailer.balanceOwed
-    val formattedBalance = java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(balanceToDisplay.toLong())
 
     Card(
         shape = RoundedCornerShape(14.dp),
@@ -1036,11 +1048,14 @@ fun RetailerCard(
                         color = TextSecondaryDark
                     )
                     Text(
-                        text = "$formattedBalance ر.ي",
+                        text = balanceToDisplay.toCleanCurrency("YER"),
                         fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = if (balanceToDisplay > java.math.BigDecimal.ZERO) StatusWarning else StatusOnline
+                        fontSize = 14.5.sp,
+                        color = if (balanceToDisplay > java.math.BigDecimal.ZERO) StatusWarning else StatusOnline,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
@@ -1140,7 +1155,7 @@ fun RetailerCard(
                 }
 
                 Text(
-                    text = "إجمالي المسدد: ${retailer.totalPaid.toInt()} ريال",
+                    text = "إجمالي المسدد: ${retailer.totalPaid.toCleanCurrency("YER")}",
                     fontSize = 11.sp,
                     color = ReceiptGreen
                 )
@@ -1667,10 +1682,9 @@ fun QuickPaymentDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "الرصيد المستحق حالياً: ${retailer.balanceOwed.toInt()} ريال",
+                    text = "الرصيد المستحق حالياً: ${retailer.balanceOwed.toCleanCurrency("YER")}",
                     color = StatusWarning,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
+                    fontWeight = FontWeight.Bold
                 )
                 OutlinedTextField(
                     value = amountText,
