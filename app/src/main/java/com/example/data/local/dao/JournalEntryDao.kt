@@ -31,10 +31,10 @@ interface JournalEntryDao {
     // 1. نظام القيود المعياري المزدوج (Header & Lines)
     // ==========================================
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertHeader(header: JournalEntryHeaderEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertLines(lines: List<JournalEntryLineEntity>): List<Long>
 
     @Update
@@ -74,6 +74,8 @@ interface JournalEntryDao {
             FROM journal_entry_lines l
             INNER JOIN journal_entry_headers h ON l.headerId = h.id
             WHERE h.status = 'POSTED'
+              AND h.reversalOfEntryId IS NULL
+              AND h.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
         ) jel ON coa.accountCode = jel.accountCode
         WHERE coa.isActive = 1
         GROUP BY coa.accountCode, coa.accountNameAr, coa.normalBalance, coa.accountType
@@ -97,7 +99,10 @@ interface JournalEntryDao {
             SELECT l.accountCode, l.debit, l.credit
             FROM journal_entry_lines l
             INNER JOIN journal_entry_headers h ON l.headerId = h.id
-            WHERE h.status = 'POSTED' AND h.dateMillis BETWEEN :startDate AND :endDate
+            WHERE h.status = 'POSTED' 
+              AND h.reversalOfEntryId IS NULL
+              AND h.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+              AND h.dateMillis BETWEEN :startDate AND :endDate
         ) jel ON coa.accountCode = jel.accountCode
         WHERE coa.isActive = 1
         GROUP BY coa.accountCode, coa.accountNameAr, coa.normalBalance, coa.accountType
@@ -125,6 +130,8 @@ interface JournalEntryDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED' 
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = :accountCode
           AND jeh.dateMillis BETWEEN :startDate AND :endDate
         ORDER BY jeh.dateMillis ASC, jel.id ASC
@@ -144,6 +151,8 @@ interface JournalEntryDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = :accountCode
           AND jeh.dateMillis < :startDate
         """
@@ -164,7 +173,10 @@ interface JournalEntryDao {
             SELECT l.accountCode, l.debit, l.credit
             FROM journal_entry_lines l
             INNER JOIN journal_entry_headers h ON l.headerId = h.id
-            WHERE h.status = 'POSTED' AND h.dateMillis BETWEEN :startDate AND :endDate
+            WHERE h.status = 'POSTED' 
+              AND h.reversalOfEntryId IS NULL
+              AND h.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+              AND h.dateMillis BETWEEN :startDate AND :endDate
         ) jel ON coa.accountCode = jel.accountCode
         WHERE coa.accountType IN ('REVENUE', 'EXPENSE') OR coa.accountCode LIKE '4%' OR coa.accountCode LIKE '5%'
         GROUP BY coa.accountCode, coa.accountNameAr, coa.normalBalance, coa.accountType
@@ -186,6 +198,8 @@ interface JournalEntryDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = '1201'
           AND jel.partyId = :customerId
         """
@@ -210,6 +224,8 @@ interface JournalEntryDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = '1201'
           AND jel.partyId = :customerId
         ORDER BY jeh.dateMillis ASC, jel.id ASC
@@ -269,12 +285,12 @@ interface JournalEntryDao {
         val originalWithLines = getHeaderWithLinesById(headerId) ?: return null
         val originalHeader = originalWithLines.header
 
-        if (originalHeader.status == "VOIDED") return null
+        if (originalHeader.voidReason != null || originalHeader.status == "VOIDED") return null
 
-        // 1. تحديث القيد الأصلي ليصبح ملغى
+        // 1. تحديث القيد الأصلي لتوثيق سبب الإلغاء مع إبقائه POSTED للحفاظ على التوازن الدفتري المتكافئ
         updateHeader(
             originalHeader.copy(
-                status = "VOIDED",
+                status = "POSTED",
                 voidReason = voidReason
             )
         )

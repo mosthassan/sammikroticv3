@@ -23,6 +23,9 @@ interface FinancialVoucherDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVoucher(voucher: FinancialVoucherEntity): Long
 
+    @Query("SELECT COUNT(*) FROM financial_vouchers")
+    suspend fun getVouchersCount(): Int
+
     @Update
     suspend fun updateVoucher(voucher: FinancialVoucherEntity)
 

@@ -35,6 +35,9 @@ interface CardSalesInvoiceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertInvoice(invoice: CardSalesInvoiceEntity): Long
 
+    @Query("SELECT COUNT(*) FROM card_sales_invoices")
+    suspend fun getInvoicesCount(): Int
+
     @Update
     suspend fun updateInvoice(invoice: CardSalesInvoiceEntity)
 

@@ -14,6 +14,9 @@ interface PurchaseInvoiceDao {
     @Query("SELECT * FROM purchase_invoices WHERE isVoided = 0 ORDER BY invoiceDateMillis DESC")
     fun getAllInvoices(): Flow<List<PurchaseInvoiceEntity>>
 
+    @Query("SELECT * FROM purchase_invoices WHERE isVoided = 0 ORDER BY invoiceDateMillis DESC")
+    suspend fun getPurchaseInvoicesList(): List<PurchaseInvoiceEntity>
+
     @Query("SELECT * FROM purchase_invoices WHERE targetType = :targetType AND isVoided = 0 ORDER BY invoiceDateMillis DESC")
     fun getInvoicesByTargetType(targetType: String): Flow<List<PurchaseInvoiceEntity>>
 

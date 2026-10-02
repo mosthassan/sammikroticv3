@@ -21,6 +21,7 @@ import com.example.data.local.dao.JournalEntryDao
 import com.example.data.local.dao.NetworkAssetDao
 import com.example.data.local.dao.NetworkDeviceDao
 import com.example.data.local.dao.NetworkIdentityDao
+import com.example.data.local.dao.NumberSequenceDao
 import com.example.data.local.dao.PartnerDao
 import com.example.data.local.dao.PurchaseInvoiceDao
 import com.example.data.local.dao.RetailerDao
@@ -41,6 +42,7 @@ import com.example.data.local.entity.JournalEntryLineEntity
 import com.example.data.local.entity.NetworkAssetEntity
 import com.example.data.local.entity.NetworkDeviceEntity
 import com.example.data.local.entity.NetworkIdentityEntity
+import com.example.data.local.entity.NumberSequenceEntity
 import com.example.data.local.entity.PartnerEntity
 import com.example.data.local.entity.PartnerTransactionEntity
 import com.example.data.local.entity.PurchaseInvoiceEntity
@@ -73,9 +75,10 @@ import kotlinx.coroutines.launch
         JournalEntryLineEntity::class,
         ChartOfAccountsEntity::class,
         CustomerLedgerEntity::class,
-        CurrencyRateEntity::class
+        CurrencyRateEntity::class,
+        NumberSequenceEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 @TypeConverters(BigDecimalConverter::class)
@@ -97,6 +100,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chartOfAccountsDao(): ChartOfAccountsDao
     abstract fun customerLedgerDao(): CustomerLedgerDao
     abstract fun currencyRateDao(): CurrencyRateDao
+    abstract fun numberSequenceDao(): NumberSequenceDao
 
     companion object {
         @Volatile
@@ -409,6 +413,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `number_sequences` (
+                        `sequenceKey` TEXT NOT NULL,
+                        `sequenceType` TEXT NOT NULL,
+                        `year` INTEGER NOT NULL,
+                        `lastValue` INTEGER NOT NULL,
+                        PRIMARY KEY(`sequenceKey`)
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -416,8 +434,15 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sam_mikrotik_db"
                 )
-                    .addMigrations(MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(
+                        MIGRATION_14_15,
+                        MIGRATION_15_16,
+                        MIGRATION_16_17,
+                        MIGRATION_17_18,
+                        MIGRATION_18_19,
+                        MIGRATION_19_20,
+                        MIGRATION_20_21
+                    )
                     .addCallback(AppDatabaseCallback())
                     .build()
                 INSTANCE = instance
@@ -436,6 +461,7 @@ abstract class AppDatabase : RoomDatabase() {
                             InitialDataSeeder.seedDatabase(database)
                             seedChartOfAccountsIfEmpty(database)
                             CustomerLedgerBackfillHelper.backfillIfEmpty(database)
+                            seedNumberSequencesIfEmpty(database)
                         }
                     } catch (e: Throwable) {
                         android.util.Log.e("AppDatabase", "Error seeding database on create: ${e.message}", e)
@@ -459,10 +485,28 @@ abstract class AppDatabase : RoomDatabase() {
                         INSTANCE?.let { database ->
                             seedChartOfAccountsIfEmpty(database)
                             CustomerLedgerBackfillHelper.backfillIfEmpty(database)
+                            seedNumberSequencesIfEmpty(database)
                         }
                     } catch (e: Throwable) {
-                        android.util.Log.e("AppDatabase", "Error backfilling ledger on open: ${e.message}", e)
+                        android.util.Log.e("AppDatabase", "Error on database open: ${e.message}", e)
                     }
+                }
+            }
+
+            private suspend fun seedNumberSequencesIfEmpty(database: AppDatabase) {
+                try {
+                    val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+                    val seqDao = database.numberSequenceDao()
+                    // Initialize sequences based on existing counts to prevent duplicate numbers
+                    val invCount = database.cardSalesInvoiceDao().getInvoicesCount().toLong()
+                    seqDao.seedInitialSequenceIfEmpty("INV", year, invCount)
+
+                    val voucherCount = database.financialVoucherDao().getVouchersCount().toLong()
+                    seqDao.seedInitialSequenceIfEmpty("REC", year, voucherCount)
+                    seqDao.seedInitialSequenceIfEmpty("PAY", year, voucherCount)
+                    seqDao.seedInitialSequenceIfEmpty("JE", year, voucherCount)
+                } catch (e: Throwable) {
+                    android.util.Log.e("AppDatabase", "Error seeding number sequences: ${e.message}", e)
                 }
             }
 

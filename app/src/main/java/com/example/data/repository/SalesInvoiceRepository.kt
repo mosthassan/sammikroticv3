@@ -127,8 +127,10 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
 
             // Create ONLY a single standalone receipt voucher with prefix "REC-" if payment > 0
             // NEVER generate any entity with prefix "REC-INV-" or "INV_PAY_"
+            val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+            var voucherNumberGenerated = ""
             if (finalPaidAmount > BigDecimal.ZERO) {
-                val voucherNumberGenerated = "REC-2026-${Random.nextInt(1000, 9999)}"
+                voucherNumberGenerated = db.numberSequenceDao().getNextNumber("REC", currentYear, "REC")
                 val voucher = FinancialVoucherEntity(
                     voucherNumber = voucherNumberGenerated,
                     voucherType = "RECEIPT",
@@ -147,7 +149,8 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
                 db.financialVoucherDao().insertVoucher(voucher)
             }
 
-            // Generate SINGLE balanced JournalEntry
+            // Generate SINGLE balanced JournalEntry for Sales
+            val salesJeNumber = db.numberSequenceDao().getNextNumber("JE", currentYear, "JE")
             val lines = mutableListOf<JournalEntryLineEntity>()
             lines.add(
                 JournalEntryLineEntity(
@@ -174,9 +177,10 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
 
             db.journalEntryDao().postBalancedEntry(
                 JournalEntryHeaderEntity(
-                    entryNumber = "JE-$invoiceNumber",
+                    entryNumber = salesJeNumber,
+                    dateMillis = invoiceEntity.invoiceDateMillis,
                     referenceType = "SALES_INVOICE",
-                    referenceId = invoiceId.toString(),
+                    referenceId = invoiceNumber,
                     description = "قيد مبيعات كروت فاتورة رقم $invoiceNumber ($customerName)",
                     createdBy = issuerName
                 ),
@@ -184,6 +188,7 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
             )
 
             if (finalPaidAmount > BigDecimal.ZERO) {
+                val receiptJeNumber = db.numberSequenceDao().getNextNumber("JE", currentYear, "JE")
                 val receiptLines = listOf(
                     JournalEntryLineEntity(
                         headerId = 0L,
@@ -207,13 +212,51 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
 
                 db.journalEntryDao().postBalancedEntry(
                     JournalEntryHeaderEntity(
-                        entryNumber = "JE-REC-$invoiceNumber",
+                        entryNumber = receiptJeNumber,
+                        dateMillis = invoiceEntity.invoiceDateMillis,
                         referenceType = "FINANCIAL_VOUCHER",
-                        referenceId = invoiceId.toString(),
+                        referenceId = voucherNumberGenerated.ifBlank { invoiceNumber },
                         description = "قيد تحصيل سداد فاتورة رقم $invoiceNumber ($customerName)",
                         createdBy = issuerName
                     ),
                     receiptLines
+                )
+            }
+
+            // ترحيل قيد تكلفة البضاعة المباعة (COGS) ومخزون الكروت المطبوعة
+            val cogsAmount = totalAmount.multiply(BigDecimal("0.5")) // احتساب تقديري محافظ
+            if (cogsAmount > BigDecimal.ZERO) {
+                val cogsJeNumber = db.numberSequenceDao().getNextNumber("JE", currentYear, "JE")
+                val cogsLines = listOf(
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "5101",
+                        accountName = "تكلفة الكروت المباعة (COGS)",
+                        lineType = "DEBIT",
+                        debit = cogsAmount,
+                        credit = BigDecimal.ZERO,
+                        lineDescription = "تكلفة كروت مباعة فاتورة #$invoiceNumber"
+                    ),
+                    JournalEntryLineEntity(
+                        headerId = 0L,
+                        accountCode = "1301",
+                        accountName = "مخزون كروت الشبكة المطبوعة",
+                        lineType = "CREDIT",
+                        debit = BigDecimal.ZERO,
+                        credit = cogsAmount,
+                        lineDescription = "صرف كروت من المخزون لفاتورة #$invoiceNumber"
+                    )
+                )
+                db.journalEntryDao().postBalancedEntry(
+                    JournalEntryHeaderEntity(
+                        entryNumber = cogsJeNumber,
+                        dateMillis = invoiceEntity.invoiceDateMillis,
+                        referenceType = "COGS",
+                        referenceId = invoiceNumber,
+                        description = "إثبات تكلفة البضاعة المباعة لفاتورة #$invoiceNumber",
+                        createdBy = issuerName
+                    ),
+                    cogsLines
                 )
             }
 
