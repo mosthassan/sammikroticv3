@@ -1008,6 +1008,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val retailers: StateFlow<List<RetailerEntity>> = repository.allRetailers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Unified General Ledger Account 1201 Customer Balances
+    val customerGlBalances: StateFlow<Map<Long, java.math.BigDecimal>> = repository.customerGlBalances
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    suspend fun getPartyBalance(accountCode: String = "1201", partyId: Long): java.math.BigDecimal {
+        return repository.getPartyBalance(accountCode, partyId)
+    }
+
+    fun getPartyBalanceFlow(accountCode: String = "1201", partyId: Long) =
+        repository.getPartyBalanceFlow(accountCode, partyId)
+
     fun getCustomerAccountSummary(customerId: Long): kotlinx.coroutines.flow.Flow<com.example.data.local.dao.CustomerAccountSummary> {
         return repository.getCustomerAccountSummary(customerId)
     }

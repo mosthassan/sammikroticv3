@@ -32,6 +32,8 @@ interface CustomerLedgerDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = '1201'
           AND jel.partyId = :customerId
         """
@@ -47,6 +49,8 @@ interface CustomerLedgerDao {
         FROM journal_entry_lines jel
         INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
         WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
           AND jel.accountCode = '1201'
           AND jel.partyId = :customerId
         """

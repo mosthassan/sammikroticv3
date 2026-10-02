@@ -133,6 +133,7 @@ fun DistributionScreen(
     val inventoryItems by viewModel.inventoryItems.collectAsState()
     val salesInvoices by viewModel.salesInvoices.collectAsState()
     val vouchers by viewModel.vouchers.collectAsState()
+    val customerGlBalances by viewModel.customerGlBalances.collectAsState()
     val context = LocalContext.current
 
     var showAddRetailerDialog by remember { mutableStateOf(false) }
@@ -155,35 +156,22 @@ fun DistributionScreen(
 
     val customerSearchQuery by viewModel.customerSearchQuery.collectAsState()
 
-    // حساب الأرصدة والكروت الحقيقية بشكل فوري ومباشر 100% من واقع الفواتير والسندات
-    val dynamicRetailers = remember(retailers, salesInvoices, vouchers) {
+    // حساب الأرصدة والكروت الحقيقية بشكل فوري ومباشر 100% من واقع الأستاذ العام (حساب 1201 ذمم الوكلاء)
+    val dynamicRetailers = remember(retailers, customerGlBalances, salesInvoices) {
         val nonSyntheticInvoices = salesInvoices.filter { !it.invoiceNumber.startsWith("INV-DELIV-") }
         retailers.map { r ->
+            // استخراج الرصيد الحقيقي الدقيق من واقع قيود الأستاذ العام لحساب 1201
+            val trueGlBalance = customerGlBalances[r.id] ?: r.balanceOwed
             val matchingInvoices = nonSyntheticInvoices.filter {
                 it.retailerId == r.id || it.customerName.trim().equals(r.name.trim(), ignoreCase = true)
             }
-            if (matchingInvoices.isNotEmpty()) {
-                val debtFromInvoices = matchingInvoices.sumOf { it.remainingAmount.toDouble() }
-                val cardsFromInvoices = matchingInvoices.filter { it.remainingAmount.compareTo(java.math.BigDecimal("0.01")) > 0 }.sumOf { it.totalCardsCount }
-                val paidFromInvoices = matchingInvoices.sumOf { it.paidAmount.toDouble() }
+            val cardsFromInvoices = matchingInvoices.filter { it.remainingAmount.compareTo(java.math.BigDecimal("0.01")) > 0 }.sumOf { it.totalCardsCount }
+            val activeCards = if (cardsFromInvoices > 0) cardsFromInvoices else r.activeCardsCount
 
-                // خصم أي سندات قبض مستقلة على البقالة لم تخصم من الفاتورة
-                val independentReceipts = vouchers.filter {
-                    (it.retailerId == r.id || it.partyName.trim().equals(r.name.trim(), ignoreCase = true)) &&
-                    it.voucherType == "RECEIPT" &&
-                    !it.description.contains("INV-") &&
-                    !it.category.contains("فاتورة")
-                }.sumOf { it.amount.toDouble() }
-
-                val finalDebt = (debtFromInvoices - independentReceipts).coerceAtLeast(0.0)
-                r.copy(
-                    balanceOwed = java.math.BigDecimal.valueOf(finalDebt),
-                    activeCardsCount = cardsFromInvoices,
-                    totalPaid = java.math.BigDecimal.valueOf(paidFromInvoices + minOf(independentReceipts, debtFromInvoices))
-                )
-            } else {
-                r
-            }
+            r.copy(
+                balanceOwed = trueGlBalance,
+                activeCardsCount = activeCards
+            )
         }
     }
 
@@ -580,8 +568,10 @@ fun DistributionScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             items(filteredRetailers, key = { it.id }) { retailer ->
+                                val trueGlBalance = customerGlBalances[retailer.id] ?: retailer.balanceOwed
                                 RetailerCard(
                                     retailer = retailer,
+                                    trueBalance = trueGlBalance,
                                     onStatement = {
                                         retailerForStatement = retailer
                                     },
@@ -761,8 +751,9 @@ fun DistributionScreen(
 
         // Customer Statement Detailed Dialog
         retailerForStatement?.let { r ->
+            val glBalance = customerGlBalances[r.id] ?: r.balanceOwed
             CustomerStatementDialog(
-                retailer = r,
+                retailer = r.copy(balanceOwed = glBalance),
                 onDismiss = { retailerForStatement = null }
             )
         }
@@ -975,6 +966,7 @@ fun DistributionScreen(
 @Composable
 fun RetailerCard(
     retailer: RetailerEntity,
+    trueBalance: java.math.BigDecimal? = null,
     onStatement: () -> Unit = {},
     onCall: () -> Unit,
     onWhatsApp: () -> Unit,
@@ -985,6 +977,9 @@ fun RetailerCard(
     onQuickPay: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val balanceToDisplay = trueBalance ?: retailer.balanceOwed
+    val formattedBalance = java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(balanceToDisplay.toLong())
+
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
@@ -1041,11 +1036,11 @@ fun RetailerCard(
                         color = TextSecondaryDark
                     )
                     Text(
-                        text = "${retailer.balanceOwed.toDouble().toInt()} ريال",
+                        text = "$formattedBalance ر.ي",
                         fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
-                        color = if (retailer.balanceOwed > java.math.BigDecimal.ZERO) StatusWarning else StatusOnline
+                        color = if (balanceToDisplay > java.math.BigDecimal.ZERO) StatusWarning else StatusOnline
                     )
                 }
             }

@@ -269,7 +269,7 @@ private fun StatementHeader(
                 color = TextSecondaryDark
             )
             Text(
-                text = "${finalBalance.toInt()} ريال",
+                text = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(finalBalance.toLong())} ر.ي",
                 fontFamily = CairoFontFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
@@ -313,7 +313,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "إجمالي المبيعات (+)",
-            amount = "${totalSales.toInt()} ر.ي",
+            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(totalSales.toLong())} ر.ي",
             icon = Icons.Default.ArrowUpward,
             iconTint = StatusWarning,
             containerColor = StatusWarning.copy(alpha = 0.08f),
@@ -324,7 +324,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "إجمالي المسدد (-)",
-            amount = "${totalPaid.toInt()} ر.ي",
+            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(totalPaid.toLong())} ر.ي",
             icon = Icons.Default.ArrowDownward,
             iconTint = ReceiptGreen,
             containerColor = ReceiptGreen.copy(alpha = 0.08f),
@@ -335,7 +335,7 @@ private fun StatementKpiSection(
         KpiCard(
             modifier = Modifier.weight(1f),
             title = "صافي المتبقي",
-            amount = "${finalBalance.toInt()} ر.ي",
+            amount = "${java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(finalBalance.toLong())} ر.ي",
             icon = Icons.Default.AccountBalanceWallet,
             iconTint = if (finalBalance > BigDecimal.ZERO) MikroTikCyan else StatusOnline,
             containerColor = (if (finalBalance > BigDecimal.ZERO) MikroTikCyan else StatusOnline).copy(alpha = 0.08f),

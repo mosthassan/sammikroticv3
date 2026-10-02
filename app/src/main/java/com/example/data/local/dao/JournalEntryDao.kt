@@ -24,6 +24,11 @@ data class CustomerStatementSummary(
     val finalBalance: BigDecimal
 )
 
+data class PartyBalanceRow(
+    val partyId: Long,
+    val balance: BigDecimal
+)
+
 @Dao
 interface JournalEntryDao {
 
@@ -233,6 +238,51 @@ interface JournalEntryDao {
     )
     fun getDetailedCustomerStatementLines(customerId: Long): Flow<List<GeneralLedgerLineRow>>
 
+    @Query(
+        """
+        SELECT COALESCE(SUM(jel.debit - jel.credit), '0')
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+          AND jel.accountCode = :accountCode
+          AND jel.partyId = :partyId
+        """
+    )
+    suspend fun getPartyBalance(accountCode: String = "1201", partyId: Long): BigDecimal
+
+    @Query(
+        """
+        SELECT COALESCE(SUM(jel.debit - jel.credit), '0')
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+          AND jel.accountCode = :accountCode
+          AND jel.partyId = :partyId
+        """
+    )
+    fun getPartyBalanceFlow(accountCode: String = "1201", partyId: Long): Flow<BigDecimal?>
+
+    @Query(
+        """
+        SELECT 
+            jel.partyId AS partyId,
+            COALESCE(SUM(jel.debit - jel.credit), '0') AS balance
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+          AND jel.accountCode = :accountCode
+          AND jel.partyId IS NOT NULL
+        GROUP BY jel.partyId
+        """
+    )
+    fun getAllPartyBalancesFlow(accountCode: String = "1201"): Flow<List<PartyBalanceRow>>
+
     @Query("DELETE FROM journal_entry_lines WHERE headerId IN (SELECT id FROM journal_entry_headers WHERE referenceId LIKE 'REC-INV-%' OR entryNumber LIKE 'REC-INV-%')")
     suspend fun sanitizeLegacyRecInvLines()
 
@@ -248,8 +298,16 @@ interface JournalEntryDao {
     @Query("DELETE FROM journal_entries WHERE (referenceType = :refType AND referenceId = :refId) OR entryNumber = :refId OR referenceId = :refId")
     suspend fun deleteLegacyEntriesByReference(refType: String, refId: String)
 
+    @Query("DELETE FROM journal_entry_lines WHERE headerId IN (SELECT id FROM journal_entry_headers WHERE reversalOfEntryId IN (SELECT id FROM journal_entry_headers WHERE referenceId = :refId OR entryNumber = :refId))")
+    suspend fun deleteReversalLinesByRef(refId: String)
+
+    @Query("DELETE FROM journal_entry_headers WHERE reversalOfEntryId IN (SELECT id FROM journal_entry_headers WHERE referenceId = :refId OR entryNumber = :refId)")
+    suspend fun deleteReversalHeadersByRef(refId: String)
+
     @Transaction
     suspend fun purgeJournalEntriesByReference(refType: String, refId: String) {
+        deleteReversalLinesByRef(refId)
+        deleteReversalHeadersByRef(refId)
         deleteLinesByReference(refType, refId)
         deleteHeadersByReference(refType, refId)
         deleteLegacyEntriesByReference(refType, refId)
@@ -259,6 +317,8 @@ interface JournalEntryDao {
         deleteLinesByReference("VOID_VOUCHER", "REV-$refId")
         deleteHeadersByReference("VOID_VOUCHER", "REV-$refId")
         deleteLegacyEntriesByReference("VOID_VOUCHER", "REV-$refId")
+        deleteLinesByReference("VOID_REVERSAL", refId)
+        deleteHeadersByReference("VOID_REVERSAL", refId)
     }
 
     /**

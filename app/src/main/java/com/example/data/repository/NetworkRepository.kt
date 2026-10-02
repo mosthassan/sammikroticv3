@@ -2536,6 +2536,18 @@ class NetworkRepository(private val db: AppDatabase) {
     // Retailers
     val allRetailers: Flow<List<RetailerEntity>> = db.retailerDao().getAllRetailers()
 
+    // General Ledger Account 1201 Customer Balances - Unified GL Source of Truth
+    val customerGlBalances: Flow<Map<Long, BigDecimal>> = db.journalEntryDao()
+        .getAllPartyBalancesFlow("1201")
+        .map { list -> list.associate { it.partyId to it.balance } }
+
+    suspend fun getPartyBalance(accountCode: String = "1201", partyId: Long): BigDecimal = withContext(Dispatchers.IO) {
+        db.journalEntryDao().getPartyBalance(accountCode, partyId)
+    }
+
+    fun getPartyBalanceFlow(accountCode: String = "1201", partyId: Long): Flow<BigDecimal?> =
+        db.journalEntryDao().getPartyBalanceFlow(accountCode, partyId)
+
     // Customer Ledger - Single Source of Truth
     fun getCustomerAccountSummary(customerId: Long): Flow<com.example.data.local.dao.CustomerAccountSummary> =
         db.customerLedgerDao().getCustomerAccountSummary(customerId)
@@ -2671,7 +2683,9 @@ class NetworkRepository(private val db: AppDatabase) {
 
             for (v in all) {
                 val numKey = v.voucherNumber.trim().uppercase()
-                val sigKey = "${v.voucherType.trim()}_${v.amount}_${v.partyName.trim()}_${v.retailerId}_${v.dateMillis}"
+                val partyKey = v.retailerId?.toString() ?: v.partyName.trim().lowercase()
+                val timeBucket = v.dateMillis / 120000 // نافذة دقيقتين لكشف التكرار الناتج عن النقر المزدوج
+                val sigKey = "${v.voucherType.trim()}_${v.amount}_${partyKey}_$timeBucket"
 
                 var isDuplicate = false
                 if (numKey.isNotBlank()) {
@@ -2710,9 +2724,22 @@ class NetworkRepository(private val db: AppDatabase) {
                 db.customerLedgerDao().deleteByReferenceId(dup.id.toString())
                 if (dup.voucherNumber.isNotBlank()) {
                     db.customerLedgerDao().deleteByReferenceId(dup.voucherNumber)
-                    val remaining = all.count { it.id != dup.id && it.voucherNumber.trim().equals(dup.voucherNumber.trim(), ignoreCase = true) }
-                    if (remaining == 0) {
+                    val activeRemaining = all.filter { it.id != dup.id && it.voucherNumber.trim().equals(dup.voucherNumber.trim(), ignoreCase = true) && !it.isVoided }
+                    if (activeRemaining.isEmpty()) {
                         db.journalEntryDao().purgeJournalEntriesByReference("FINANCIAL_VOUCHER", dup.voucherNumber)
+                        com.example.data.local.DeletedRecordsTracker.markVoucherDeleted(dup.voucherNumber)
+                    } else {
+                        // هناك سند أصلي نشط متبقي: حذف أي قيد عكسي خاطئ ناتج عن إلغاء النسخة المكررة سابقاً
+                        db.journalEntryDao().deleteLinesByReference("VOID_VOUCHER", dup.voucherNumber)
+                        db.journalEntryDao().deleteHeadersByReference("VOID_VOUCHER", dup.voucherNumber)
+                        db.journalEntryDao().deleteLegacyEntriesByReference("VOID_VOUCHER", dup.voucherNumber)
+                        db.journalEntryDao().deleteLinesByReference("VOID_VOUCHER", "REV-${dup.voucherNumber}")
+                        db.journalEntryDao().deleteHeadersByReference("VOID_VOUCHER", "REV-${dup.voucherNumber}")
+                        db.journalEntryDao().deleteLegacyEntriesByReference("VOID_VOUCHER", "REV-${dup.voucherNumber}")
+                        db.journalEntryDao().deleteLinesByReference("VOID_REVERSAL", dup.voucherNumber)
+                        db.journalEntryDao().deleteHeadersByReference("VOID_REVERSAL", dup.voucherNumber)
+                        db.journalEntryDao().deleteReversalLinesByRef(dup.voucherNumber)
+                        db.journalEntryDao().deleteReversalHeadersByRef(dup.voucherNumber)
                     }
                 }
             }
@@ -3514,24 +3541,26 @@ class NetworkRepository(private val db: AppDatabase) {
 
         // 4. Restore Financial Vouchers
         val existingVouchers = db.financialVoucherDao().getAllVouchers().first()
-        val existingVouchNums = existingVouchers.associateBy { it.voucherNumber.trim() }
+        val runningVouchers = existingVouchers.associateBy { it.voucherNumber.trim().uppercase() }.toMutableMap()
 
         for (voucher in cloudData.vouchers) {
             val vNum = voucher.voucherNumber.trim()
-            if (vNum.isBlank() || com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(vNum)) {
+            val numKey = vNum.uppercase()
+            if (vNum.isBlank() || com.example.data.local.DeletedRecordsTracker.isVoucherDeleted(numKey)) {
                 // تجاهل أي سند تم حذفه مسبقاً محلياً لمنع إعادته
                 continue
             }
-            val match = existingVouchNums[vNum]
+            val match = runningVouchers[numKey]
             if (match != null) {
                 val preservedVoid = match.isVoided || voucher.isVoided
-                db.financialVoucherDao().updateVoucher(
-                    voucher.copy(id = match.id, isVoided = preservedVoid)
-                )
+                val updated = voucher.copy(id = match.id, isVoided = preservedVoid)
+                db.financialVoucherDao().updateVoucher(updated)
+                runningVouchers[numKey] = updated
             } else {
-                db.financialVoucherDao().insertVoucher(
+                val newId = db.financialVoucherDao().insertVoucher(
                     voucher.copy(id = 0L)
                 )
+                runningVouchers[numKey] = voucher.copy(id = newId)
             }
         }
         deduplicateVouchers()
