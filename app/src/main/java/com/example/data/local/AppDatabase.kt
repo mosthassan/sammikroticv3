@@ -78,7 +78,7 @@ import kotlinx.coroutines.launch
         CurrencyRateEntity::class,
         NumberSequenceEntity::class
     ],
-    version = 22,
+    version = 23,
     exportSchema = false
 )
 @TypeConverters(BigDecimalConverter::class)
@@ -435,6 +435,50 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    // Backfill invoiceKind based on actual matching invoices
+                    db.execSQL("""
+                        UPDATE financial_vouchers
+                        SET invoiceKind = 'SALES'
+                        WHERE (invoiceKind IS NULL OR invoiceKind = '' OR invoiceKind = 'NONE')
+                          AND (invoiceNumber IN (SELECT invoiceNumber FROM card_sales_invoices)
+                               OR invoiceId IN (SELECT id FROM card_sales_invoices))
+                    """.trimIndent())
+
+                    db.execSQL("""
+                        UPDATE financial_vouchers
+                        SET invoiceKind = 'PURCHASE'
+                        WHERE (invoiceKind IS NULL OR invoiceKind = '' OR invoiceKind = 'NONE')
+                          AND (invoiceNumber IN (SELECT invoiceNumber FROM purchase_invoices)
+                               OR invoiceId IN (SELECT id FROM purchase_invoices))
+                    """.trimIndent())
+
+                    db.execSQL("""
+                        UPDATE financial_vouchers
+                        SET invoiceKind = 'NONE'
+                        WHERE invoiceKind IS NULL
+                    """.trimIndent())
+                } catch (e: Exception) {
+                    android.util.Log.e("AppDatabase", "Error migrating invoiceKind: ${e.message}")
+                }
+
+                // Add unique indexes for natural keys
+                try {
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_financial_vouchers_voucherNumber` ON `financial_vouchers` (`voucherNumber`)")
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_card_sales_invoices_invoiceNumber` ON `card_sales_invoices` (`invoiceNumber`)")
+                } catch (_: Exception) {}
+
+                try {
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_invoices_invoiceNumber` ON `purchase_invoices` (`invoiceNumber`)")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -450,7 +494,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_18_19,
                         MIGRATION_19_20,
                         MIGRATION_20_21,
-                        MIGRATION_21_22
+                        MIGRATION_21_22,
+                        MIGRATION_22_23
                     )
                     .addCallback(AppDatabaseCallback())
                     .build()

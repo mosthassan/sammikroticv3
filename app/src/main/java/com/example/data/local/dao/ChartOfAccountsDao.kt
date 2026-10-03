@@ -137,6 +137,14 @@ interface ChartOfAccountsDao {
                 description = "الإيرادات المحققة من بيع وتوزيع كروت الإنترنت"
             ),
             ChartOfAccountsEntity(
+                accountCode = "4102",
+                accountNameAr = "مردودات ومسموحات المبيعات",
+                accountNameEn = "Sales Returns & Allowances",
+                accountType = "REVENUE",
+                normalBalance = "DEBIT",
+                description = "مردودات ومسوغات كروت ومبيعات الشبكة المسترجعة"
+            ),
+            ChartOfAccountsEntity(
                 accountCode = "4201",
                 accountNameAr = "إيرادات الاشتراكات المباشرة",
                 accountNameEn = "Direct Subscriptions Revenue",

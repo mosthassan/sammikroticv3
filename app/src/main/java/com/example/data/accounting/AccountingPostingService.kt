@@ -338,33 +338,29 @@ class AccountingPostingService(private val db: AppDatabase) {
             )
         } else {
             // سند صرف:
-            val isPurchaseInvoice = voucher.invoiceKind == "PURCHASE" ||
-                (voucher.invoiceKind == null && (
-                    voucher.invoiceNumber.startsWith("PUR-") ||
-                    voucher.category.contains("مشتريات") ||
-                    voucher.category.contains("أصول")
-                ))
+            val isPurchaseInvoice = voucher.invoiceKind == "PURCHASE"
 
             val linkedPurchase = if (isPurchaseInvoice) {
-                if (voucher.invoiceId != null) {
+                if (voucher.invoiceId != null && voucher.invoiceId > 0L) {
                     db.purchaseInvoiceDao().getInvoiceById(voucher.invoiceId)
                 } else if (voucher.invoiceNumber.isNotBlank()) {
                     db.purchaseInvoiceDao().getInvoiceByNumber(voucher.invoiceNumber)
                 } else null
             } else null
 
-            val (debitCode, debitName) = if (linkedPurchase != null) {
-                Pair("2101", "الموردون وذمم المشتريات / $effectiveParty")
-            } else if (voucher.invoiceKind == "SALES" || voucher.category.contains("استرداد") || voucher.category.contains("إلغاء فاتورة")) {
-                // استرداد مبيعات للعميل: يوجّه إلى ذمم العملاء 1201 أو مردودات المبيعات وليس 5201 مصروفات
+            val (debitCode, debitName, partyId, partyType) = if (linkedPurchase != null) {
+                Quadruple("2101", "الموردون وذمم المشتريات / $effectiveParty", linkedPurchase.id, "SUPPLIER")
+            } else if (voucher.invoiceKind == "SALES" || voucher.category.contains("استرداد") || voucher.category.contains("إلغاء فاتورة") || voucher.category.contains("مردود")) {
+                // استرداد مبيعات للعميل: يوجّه إلى ذمم العملاء 1201 أو مردودات المبيعات 4102 وليس 5201 مصروفات
                 val retId = voucher.retailerId
                 if (retId != null) {
-                    Pair("1201", "ذمم العملاء والوكلاء / $effectiveParty")
+                    Quadruple("1201", "ذمم العملاء والوكلاء / $effectiveParty", retId, "RETAILER")
                 } else {
-                    Pair("4101", "إيرادات ومردودات مبيعات كروت الشبكة")
+                    Quadruple("4102", "مردودات ومسموحات المبيعات", null, null)
                 }
             } else {
-                mapPaymentCategoryToAccount(voucher.category, effectiveParty)
+                val (code, name) = mapPaymentCategoryToAccount(voucher.category, effectiveParty)
+                Quadruple(code, name, voucher.retailerId, if (voucher.retailerId != null) "RETAILER" else null)
             }
 
             listOf(
@@ -376,7 +372,8 @@ class AccountingPostingService(private val db: AppDatabase) {
                     debit = amountYer,
                     credit = BigDecimal.ZERO,
                     currency = voucher.currency,
-                    partyId = voucher.retailerId,
+                    partyId = partyId,
+                    partyType = partyType,
                     lineDescription = "صرف نفقة سند #${voucher.voucherNumber} - ${voucher.description}"
                 ),
                 JournalEntryLineEntity(
@@ -546,6 +543,97 @@ class AccountingPostingService(private val db: AppDatabase) {
             ),
             lines
         )
+    }
+
+    /**
+     * ترحيل قيد شراء/إضافة أصل رأسمالي يدوي (1501 Capex)
+     */
+    suspend fun postAssetAcquisition(
+        asset: com.example.data.local.entity.NetworkAssetEntity,
+        paymentAccountCode: String = "1101",
+        performer: String = "المهندس سام"
+    ): Long? = withContext(Dispatchers.IO) {
+        val costYer = asset.purchaseCost
+        if (costYer <= BigDecimal.ZERO) return@withContext null
+
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
+            "FIXED_ASSET_PURCHASE",
+            asset.id.toString(),
+            asset.assetName
+        )
+        if (existing != null) return@withContext existing.id
+
+        val docYear = getDocumentYear(asset.purchaseDateMillis)
+        val entryNumber = db.numberSequenceDao().getNextNumber("JE", docYear, "JE")
+
+        val (creditCode, creditName) = when (paymentAccountCode) {
+            "3201" -> Pair("3201", "جاري الشركاء (تمويل رأسمالي)")
+            "2101" -> Pair("2101", "الموردون والدائنون (شراء آجل)")
+            "1102" -> Pair("1102", "البنوك ومحافظ الصرافة")
+            else -> Pair("1101", "الصندوق الرئيسي (النقدية)")
+        }
+
+        val lines = listOf(
+            JournalEntryLineEntity(
+                headerId = 0L,
+                accountCode = "1501",
+                accountName = "أصول ومعدات الشبكة (نفقات رأسمالية)",
+                lineType = "DEBIT",
+                debit = costYer,
+                credit = BigDecimal.ZERO,
+                currency = asset.currency,
+                originalAmount = asset.originalCost,
+                partyId = asset.id,
+                partyType = "ASSET",
+                lineDescription = if (asset.serialNumber.isNotBlank()) "شراء/إضافة أصل رأسمالي: ${asset.assetName} (${asset.serialNumber})" else "شراء/إضافة أصل رأسمالي: ${asset.assetName}"
+            ),
+            JournalEntryLineEntity(
+                headerId = 0L,
+                accountCode = creditCode,
+                accountName = creditName,
+                lineType = "CREDIT",
+                debit = BigDecimal.ZERO,
+                credit = costYer,
+                currency = asset.currency,
+                originalAmount = asset.originalCost,
+                lineDescription = "سداد قيمة الأصل: ${asset.assetName}"
+            )
+        )
+
+        db.journalEntryDao().postBalancedEntry(
+            JournalEntryHeaderEntity(
+                entryNumber = entryNumber,
+                dateMillis = asset.purchaseDateMillis,
+                referenceType = "FIXED_ASSET_PURCHASE",
+                referenceId = asset.id.toString(),
+                description = "شراء أصل ثابت: ${asset.assetName} (${asset.category})",
+                createdBy = performer
+            ),
+            lines
+        )
+    }
+
+    /**
+     * تحديث قيد شراء أصل رأسمالي عند تعديل تكلفته
+     */
+    suspend fun updateAssetAcquisitionPosting(
+        asset: com.example.data.local.entity.NetworkAssetEntity,
+        paymentAccountCode: String = "1101",
+        performer: String = "المهندس سام"
+    ): Long? = withContext(Dispatchers.IO) {
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
+            "FIXED_ASSET_PURCHASE",
+            asset.id.toString(),
+            asset.assetName
+        )
+        if (existing != null) {
+            db.journalEntryDao().voidEntryWithReversal(
+                existing.id,
+                "قيد عكسي لتعديل تكلفة الأصل #${asset.id} (${asset.assetName})",
+                performer
+            )
+        }
+        postAssetAcquisition(asset, paymentAccountCode, performer)
     }
 
     /**
@@ -751,9 +839,10 @@ class AccountingPostingService(private val db: AppDatabase) {
         if (cat.startsWith("3201") || cat.contains("3201")) return Pair("3201", "جاري الشركاء والأرباح المسحوبة")
         if (cat.startsWith("2101") || cat.contains("2101")) return Pair("2101", "الموردون وذمم المشتريات / $partyName")
 
-        // 0.5. استرداد أو إلغاء فواتير المبيعات ومردوداتها (توجيه لمردودات المبيعات وليس المصروفات)
+        // 0.5. استرداد أو إلغاء فواتير المبيعات ومردوداتها (توجيه لمردودات ومسموحات المبيعات 4102 وليس المصروفات)
+        if (cat.startsWith("4102") || cat.contains("4102")) return Pair("4102", "مردودات ومسموحات المبيعات")
         if (cat.contains("استرداد") || cat.contains("إلغاء فاتورة") || cat.contains("مردود") || cat.contains("مبيعات كروت")) {
-            return Pair("4101", "إيرادات ومردودات مبيعات كروت الشبكة")
+            return Pair("4102", "مردودات ومسموحات المبيعات")
         }
 
         // 1. مسحوبات الشركاء وجاري الشركاء

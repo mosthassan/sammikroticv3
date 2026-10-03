@@ -1,13 +1,19 @@
 package com.example.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.math.BigDecimal
 
 /**
  * يمثل فاتورة مشتريات أو أصول معتمدة في النظام
  */
-@Entity(tableName = "purchase_invoices")
+@Entity(
+    tableName = "purchase_invoices",
+    indices = [
+        Index(value = ["invoiceNumber"], unique = true)
+    ]
+)
 data class PurchaseInvoiceEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

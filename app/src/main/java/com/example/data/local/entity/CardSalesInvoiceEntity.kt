@@ -1,6 +1,7 @@
 package com.example.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.math.BigDecimal
 
@@ -8,7 +9,12 @@ import java.math.BigDecimal
  * يمثل فاتورة مبيعات كروت متعددة الأصناف في النظام المحاسبي
  * مرتبطة بحسابات المخزن لخصم الكروت بالعدد مباشرة، وبحسابات العملاء والبقالات
  */
-@Entity(tableName = "card_sales_invoices")
+@Entity(
+    tableName = "card_sales_invoices",
+    indices = [
+        Index(value = ["invoiceNumber"], unique = true)
+    ]
+)
 data class CardSalesInvoiceEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

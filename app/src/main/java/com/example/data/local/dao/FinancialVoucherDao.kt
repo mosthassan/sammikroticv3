@@ -20,8 +20,20 @@ interface FinancialVoucherDao {
     @Query("SELECT * FROM financial_vouchers WHERE retailerId = :retailerId ORDER BY dateMillis DESC")
     fun getVouchersForRetailer(retailerId: Long): Flow<List<FinancialVoucherEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertVoucher(voucher: FinancialVoucherEntity): Long
+
+    @Query("SELECT * FROM financial_vouchers WHERE id = :id LIMIT 1")
+    suspend fun getVoucherById(id: Long): FinancialVoucherEntity?
+
+    @Query("SELECT * FROM financial_vouchers WHERE voucherNumber = :voucherNumber LIMIT 1")
+    suspend fun getVoucherByNumber(voucherNumber: String): FinancialVoucherEntity?
+
+    @Query("SELECT * FROM financial_vouchers WHERE invoiceId = :invoiceId AND invoiceKind = :invoiceKind AND voucherType = :voucherType AND isVoided = 0 ORDER BY dateMillis DESC")
+    suspend fun getActiveVouchersForInvoice(invoiceId: Long, invoiceKind: String, voucherType: String): List<FinancialVoucherEntity>
+
+    @Query("SELECT COALESCE(SUM(amount), '0') FROM financial_vouchers WHERE invoiceId = :invoiceId AND invoiceKind = :invoiceKind AND voucherType = :voucherType AND isVoided = 0")
+    suspend fun getActiveVouchersSumForInvoice(invoiceId: Long, invoiceKind: String, voucherType: String): java.math.BigDecimal
 
     @Query("SELECT COUNT(*) FROM financial_vouchers")
     suspend fun getVouchersCount(): Int

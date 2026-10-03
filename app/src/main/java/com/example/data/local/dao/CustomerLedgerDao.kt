@@ -57,7 +57,31 @@ interface CustomerLedgerDao {
     )
     fun getAccountSummary(customerId: Long): Flow<CustomerAccountSummary>
 
-    @Query("SELECT * FROM customer_ledger WHERE customerId = :customerId AND referenceId NOT LIKE 'REC-INV-%' AND referenceId NOT LIKE 'INV_PAY_%' ORDER BY transactionDate DESC")
+    @Query(
+        """
+        SELECT 
+            jel.id AS id,
+            jel.partyId AS customerId,
+            jeh.dateMillis AS transactionDate,
+            CASE 
+                WHEN jeh.referenceType LIKE '%INVOICE%' THEN 'INVOICE'
+                WHEN jeh.referenceType LIKE '%VOUCHER%' THEN 'PAYMENT'
+                ELSE jeh.referenceType 
+            END AS transactionType,
+            COALESCE(jeh.referenceId, jeh.entryNumber) AS referenceId,
+            jel.debit AS debit,
+            jel.credit AS credit,
+            COALESCE(jel.lineDescription, jeh.description) AS description
+        FROM journal_entry_lines jel
+        INNER JOIN journal_entry_headers jeh ON jel.headerId = jeh.id
+        WHERE jeh.status = 'POSTED'
+          AND jeh.reversalOfEntryId IS NULL
+          AND jeh.id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+          AND jel.accountCode = '1201'
+          AND jel.partyId = :customerId
+        ORDER BY jeh.dateMillis DESC, jel.id DESC
+        """
+    )
     fun getLedgerForCustomer(customerId: Long): Flow<List<CustomerLedgerEntity>>
 
     @Query("DELETE FROM customer_ledger WHERE referenceId = :referenceId")

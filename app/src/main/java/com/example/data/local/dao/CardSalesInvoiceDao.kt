@@ -35,7 +35,7 @@ interface CardSalesInvoiceDao {
     @Query("SELECT * FROM card_sales_invoices WHERE retailerId = :retailerId AND isVoided = 0 ORDER BY invoiceDateMillis DESC")
     fun getInvoicesForRetailer(retailerId: Long): Flow<List<CardSalesInvoiceEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertInvoice(invoice: CardSalesInvoiceEntity): Long
 
     @Query("SELECT COUNT(*) FROM card_sales_invoices")

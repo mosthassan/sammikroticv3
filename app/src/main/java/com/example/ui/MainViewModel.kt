@@ -1265,9 +1265,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         invoiceNumber: String = "",
         onComplete: (String) -> Unit = {}
     ) {
-        val tempVoucherNumber = "${if (voucherType == "RECEIPT") "REC" else "PAY"}-2026-${System.currentTimeMillis() % 100000}"
-        onComplete(tempVoucherNumber)
-
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val issuer = _currentUser.value?.fullName ?: "المهندس سام"
@@ -1284,27 +1281,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     invoiceId = invoiceId,
                     invoiceNumber = invoiceNumber
                 )
-                val voucherNumberGenerated = "${if (voucherType == "RECEIPT") "REC" else "PAY"}-2026-${id}"
-                val userEmail = _currentUser.value?.email?.takeIf { it.isNotBlank() }
-                firebaseService.pushVoucher(
-                    FinancialVoucherEntity(
-                        id = id,
-                        voucherNumber = voucherNumberGenerated,
-                        voucherType = voucherType,
-                        amount = BigDecimal.valueOf(amount),
-                        currency = currency,
-                        partyName = partyName,
-                        retailerId = retailerId,
-                        invoiceId = invoiceId,
-                        invoiceNumber = invoiceNumber,
-                        allocatedAmount = if (invoiceId != null || invoiceNumber.isNotBlank()) BigDecimal.valueOf(amount) else BigDecimal.ZERO,
-                        category = category,
-                        paymentMethod = paymentMethod,
-                        description = description,
-                        issuerName = issuer
-                    ),
-                    userEmail
-                )
+                val createdVoucher = db.financialVoucherDao().getVoucherById(id)
+                val finalVoucherNumber = createdVoucher?.voucherNumber ?: ""
+                withContext(Dispatchers.Main) {
+                    onComplete(finalVoucherNumber)
+                }
+                if (createdVoucher != null) {
+                    val userEmail = _currentUser.value?.email?.takeIf { it.isNotBlank() }
+                    firebaseService.pushVoucher(createdVoucher, userEmail)
+                }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error creating voucher in background", e)
             }
@@ -1525,7 +1510,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val voucherToLink = if (saveAsVoucher) {
                 val existingVouchers = db.financialVoucherDao().getVouchersByInvoiceNumber(finalInvoiceNumber)
                 val existingVoucher = existingVouchers.firstOrNull()
-                val voucherNum = existingVoucher?.voucherNumber ?: "PAY-${System.currentTimeMillis() % 100000}"
+                val cal = java.util.Calendar.getInstance().apply { timeInMillis = invoiceToSave.invoiceDateMillis }
+                val docYear = cal.get(java.util.Calendar.YEAR)
+                val voucherNum = existingVoucher?.voucherNumber ?: db.numberSequenceDao().getNextNumber("PAY", docYear, "PAY")
                 val voucherCat = if (invoiceToSave.targetType == "ASSETS") "أصول ومعدات شبكة" else "صيانة ومعدات"
                 val desc = "سداد فاتورة مشتريات #$finalInvoiceNumber (${invoiceToSave.supplierName}): $summaryText"
 
@@ -1580,7 +1567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         status = "ACTIVE",
                         notes = "مستورد من فاتورة رقم: $finalInvoiceNumber (المورد: ${invoiceToSave.supplierName})"
                     )
-                    repository.saveAsset(asset)
+                    repository.saveAsset(asset, postEntry = false)
                 }
             }
 
@@ -1715,9 +1702,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 for (vNum in deletedVouchers) {
                     firebaseService.deleteVoucher(vNum, userEmail)
                 }
-
-                // تنظيف التكرارات المحلية قبل المزامنة
-                repository.deduplicateVouchers()
 
                 // الخطوة 1: سحب أي بيانات مخزنة بالسحابة (مهم جداً للهواتف الجديدة أو الأجهزة المتعددة)
                 val cloudData = firebaseService.pullFromCloud(userEmail)

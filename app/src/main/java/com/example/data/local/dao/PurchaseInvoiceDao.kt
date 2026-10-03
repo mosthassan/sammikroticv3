@@ -26,7 +26,7 @@ interface PurchaseInvoiceDao {
     @Query("SELECT * FROM purchase_invoices WHERE invoiceNumber = :invoiceNumber LIMIT 1")
     suspend fun getInvoiceByNumber(invoiceNumber: String): PurchaseInvoiceEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertInvoice(invoice: PurchaseInvoiceEntity): Long
 
     @Update

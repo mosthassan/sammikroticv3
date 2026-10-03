@@ -260,10 +260,6 @@ fun VouchersListSubScreen(
     var voucherToVoid by remember { mutableStateOf<FinancialVoucherEntity?>(null) }
     var voucherToDelete by remember { mutableStateOf<FinancialVoucherEntity?>(null) }
 
-    LaunchedEffect(Unit) {
-        viewModel.deduplicateVouchers()
-    }
-
     val filterTypes = listOf("الكل", "سندات قبض", "سندات صرف")
 
     val filteredVouchers = vouchers.filter { voucher ->

@@ -1,10 +1,16 @@
 package com.example.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.math.BigDecimal
 
-@Entity(tableName = "financial_vouchers")
+@Entity(
+    tableName = "financial_vouchers",
+    indices = [
+        Index(value = ["voucherNumber"], unique = true)
+    ]
+)
 data class FinancialVoucherEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -17,7 +23,7 @@ data class FinancialVoucherEntity(
     val retailerId: Long? = null,        // إذا كان السند مرتبط بحساب بقالة معينة
     val invoiceId: Long? = null,         // معرف الفاتورة المرتبطة إن وجد
     val invoiceNumber: String = "",       // رقم الفاتورة المرتبطة إن وجد
-    val invoiceKind: String? = null,     // نوع الفاتورة: "SALES" أو "PURCHASE" لتفادي تضارب معرفات الفواتير
+    val invoiceKind: String = "NONE",     // نوع الفاتورة: "SALES" أو "PURCHASE" أو "NONE"
     val allocatedAmount: BigDecimal = BigDecimal.ZERO, // المبلغ المخصص للفواتير
     val category: String,                // "مبيعات كروت", "اشتراك نت رئيسي", "ديزل وطاقة شمسية", "صيانة ومعدات", "رواتب مهندسين", "مصاريف أخرى"
     val paymentMethod: String = "نقداً", // "نقداً", "تحويل كاش / بنكي", "حوالة صرافة"

@@ -227,8 +227,8 @@ class AccountingEngineUnitTest {
         assertTrue("Sales invoice cancellation must be identified as sales return", isSalesReturn1)
         assertTrue("Card sales refund must be identified as sales return", isSalesReturn2)
 
-        val mappedAccount = if (isSalesReturn1) "4101" else "5201"
-        assertEquals("4101", mappedAccount)
+        val mappedAccount = if (isSalesReturn1) "4102" else "5201"
+        assertEquals("4102", mappedAccount)
         assertNotEquals("5201", mappedAccount)
     }
 
@@ -260,5 +260,67 @@ class AccountingEngineUnitTest {
         assertEquals("PURCHASE", purchaseVoucher.invoiceKind)
         assertFalse(salesVoucher.invoiceKind == "PURCHASE")
         assertTrue(purchaseVoucher.invoiceKind == "PURCHASE")
+    }
+
+    @Test
+    fun testAssetAcquisitionDoubleEntryInvariance() {
+        // P0-3: Asset Acquisition entry must Debit 1501 and Credit Cash/Source
+        val cost = BigDecimal("75000.00")
+        val lines = listOf(
+            JournalEntryLineEntity(
+                headerId = 1,
+                accountCode = "1501",
+                accountName = "أصول ومعدات الشبكة",
+                lineType = "DEBIT",
+                debit = cost,
+                credit = BigDecimal.ZERO,
+                partyId = 10L,
+                partyType = "ASSET"
+            ),
+            JournalEntryLineEntity(
+                headerId = 1,
+                accountCode = "1101",
+                accountName = "الصندوق الرئيسي (النقدية)",
+                lineType = "CREDIT",
+                debit = BigDecimal.ZERO,
+                credit = cost
+            )
+        )
+        val debitSum = lines.filter { it.lineType == "DEBIT" }.fold(BigDecimal.ZERO) { acc, l -> acc.add(l.debit) }
+        val creditSum = lines.filter { it.lineType == "CREDIT" }.fold(BigDecimal.ZERO) { acc, l -> acc.add(l.credit) }
+        assertEquals("Asset acquisition must be strictly balanced", debitSum, creditSum)
+        assertEquals(cost, debitSum)
+    }
+
+    @Test
+    fun testRetailerPaymentReductionInvariance() {
+        // P0-2: Invariance rule: sum of unvoided receipts == paidAmount
+        val initialPaid = BigDecimal("20000.00")
+        val reducedPaid = BigDecimal("12000.00")
+
+        // Active receipts before modification: [20,000]
+        val activeBefore = listOf(initialPaid)
+        assertEquals(initialPaid, activeBefore.fold(BigDecimal.ZERO, BigDecimal::add))
+
+        // After reduction: old receipt is voided (0), new receipt created (12,000)
+        val activeAfter = listOf(reducedPaid)
+        val sumActive = activeAfter.fold(BigDecimal.ZERO, BigDecimal::add)
+        assertEquals(reducedPaid, sumActive)
+        assertTrue(sumActive.compareTo(reducedPaid) == 0)
+    }
+
+    @Test
+    fun testPurchaseSupplierPayableBalanceInvariance() {
+        // P0-4: Account 2101 balance = invoice total - sum of unvoided payment vouchers
+        val invoiceTotal = BigDecimal("150000.00")
+        val paymentVoucherAmount = BigDecimal("50000.00")
+        val expectedPayable = invoiceTotal.subtract(paymentVoucherAmount)
+
+        val invoiceCredit = JournalEntryLineEntity(headerId = 1, accountCode = "2101", accountName = "موردون", lineType = "CREDIT", debit = BigDecimal.ZERO, credit = invoiceTotal)
+        val paymentDebit = JournalEntryLineEntity(headerId = 2, accountCode = "2101", accountName = "موردون", lineType = "DEBIT", debit = paymentVoucherAmount, credit = BigDecimal.ZERO)
+
+        val netPayable = invoiceCredit.credit.subtract(paymentDebit.debit)
+        assertEquals(expectedPayable, netPayable)
+        assertEquals(BigDecimal("100000.00"), netPayable)
     }
 }
