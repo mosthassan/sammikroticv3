@@ -39,9 +39,10 @@ class AccountingPostingService(private val db: AppDatabase) {
         val rate = if (rateEntity != null && rateEntity.rateToBase > BigDecimal.ZERO) {
             rateEntity.rateToBase
         } else {
+            val identity = try { db.networkIdentityDao().getNetworkIdentity() } catch (_: Exception) { null }
             when (curr) {
-                "SAR" -> BigDecimal("140.0")
-                "USD" -> BigDecimal("530.0")
+                "SAR" -> BigDecimal.valueOf(if (identity != null && identity.sarToYerRate > 0) identity.sarToYerRate else 140.0)
+                "USD" -> BigDecimal.valueOf(if (identity != null && identity.usdToYerRate > 0) identity.usdToYerRate else 530.0)
                 else -> BigDecimal.ONE
             }
         }
@@ -74,7 +75,7 @@ class AccountingPostingService(private val db: AppDatabase) {
         if (invoice.totalAmount <= BigDecimal.ZERO) return@withContext null
 
         // منع التكرار: البحث برقم الفاتورة أو بمعرف السجل القديم
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "SALES_INVOICE",
             invoice.invoiceNumber,
             invoice.id.toString()
@@ -198,7 +199,7 @@ class AccountingPostingService(private val db: AppDatabase) {
     ) {
         if (costMap.isEmpty() && items.isEmpty()) return
 
-        val existingCogs = db.journalEntryDao().getHeaderByReferenceWithAlt("COGS", invoice.invoiceNumber, invoice.id.toString())
+        val existingCogs = db.journalEntryDao().getActiveHeaderByReferenceWithAlt("COGS", invoice.invoiceNumber, invoice.id.toString())
         if (existingCogs != null) return
 
         var totalCogs = BigDecimal.ZERO
@@ -263,7 +264,7 @@ class AccountingPostingService(private val db: AppDatabase) {
     ): Long? = withContext(Dispatchers.IO) {
         if (voucher.amount <= BigDecimal.ZERO || voucher.isVoided) return@withContext null
 
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "FINANCIAL_VOUCHER",
             voucher.voucherNumber,
             voucher.id.toString()
@@ -337,14 +338,31 @@ class AccountingPostingService(private val db: AppDatabase) {
             )
         } else {
             // سند صرف:
-            val linkedPurchase = if (voucher.invoiceId != null) {
-                db.purchaseInvoiceDao().getInvoiceById(voucher.invoiceId)
-            } else if (voucher.invoiceNumber.isNotBlank()) {
-                db.purchaseInvoiceDao().getInvoiceByNumber(voucher.invoiceNumber)
+            val isPurchaseInvoice = voucher.invoiceKind == "PURCHASE" ||
+                (voucher.invoiceKind == null && (
+                    voucher.invoiceNumber.startsWith("PUR-") ||
+                    voucher.category.contains("مشتريات") ||
+                    voucher.category.contains("أصول")
+                ))
+
+            val linkedPurchase = if (isPurchaseInvoice) {
+                if (voucher.invoiceId != null) {
+                    db.purchaseInvoiceDao().getInvoiceById(voucher.invoiceId)
+                } else if (voucher.invoiceNumber.isNotBlank()) {
+                    db.purchaseInvoiceDao().getInvoiceByNumber(voucher.invoiceNumber)
+                } else null
             } else null
 
             val (debitCode, debitName) = if (linkedPurchase != null) {
                 Pair("2101", "الموردون وذمم المشتريات / $effectiveParty")
+            } else if (voucher.invoiceKind == "SALES" || voucher.category.contains("استرداد") || voucher.category.contains("إلغاء فاتورة")) {
+                // استرداد مبيعات للعميل: يوجّه إلى ذمم العملاء 1201 أو مردودات المبيعات وليس 5201 مصروفات
+                val retId = voucher.retailerId
+                if (retId != null) {
+                    Pair("1201", "ذمم العملاء والوكلاء / $effectiveParty")
+                } else {
+                    Pair("4101", "إيرادات ومردودات مبيعات كروت الشبكة")
+                }
             } else {
                 mapPaymentCategoryToAccount(voucher.category, effectiveParty)
             }
@@ -399,7 +417,7 @@ class AccountingPostingService(private val db: AppDatabase) {
     ): Long? = withContext(Dispatchers.IO) {
         if (invoice.totalAmount <= BigDecimal.ZERO || invoice.isVoided) return@withContext null
 
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "PURCHASE_INVOICE",
             invoice.invoiceNumber,
             invoice.id.toString()
@@ -539,113 +557,35 @@ class AccountingPostingService(private val db: AppDatabase) {
         costMap: Map<String, BigDecimal> = emptyMap(),
         performer: String = invoice.issuerName.ifBlank { "النظام المحاسبي" }
     ): Long? = withContext(Dispatchers.IO) {
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "SALES_INVOICE",
             invoice.invoiceNumber,
             invoice.id.toString()
         )
-        if (existing == null) {
-            return@withContext postSalesInvoice(invoice, items, costMap, performer)
-        }
 
         // إذا تم إلغاء الفاتورة، نقوم بإجراء قيد عكسي تسوية
         if (invoice.isVoided) {
-            db.journalEntryDao().voidEntryWithReversal(existing.id, invoice.voidReason.ifBlank { "إلغاء فاتورة المبيعات" }, performer)
-            return@withContext existing.id
-        }
-
-        // تحديث أسطر القيد الحالي لتطابق الفاتورة المعدلة
-        db.journalEntryDao().deleteLinesByHeaderId(existing.id)
-
-        val lines = mutableListOf<JournalEntryLineEntity>()
-        val effectiveCustomer = invoice.customerName.ifBlank { "عميل نقدي" }
-
-        if (invoice.retailerId != null) {
-            lines.add(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "1201",
-                    accountName = "ذمم العملاء والوكلاء / $effectiveCustomer",
-                    lineType = "DEBIT",
-                    debit = invoice.totalAmount,
-                    credit = BigDecimal.ZERO,
-                    partyId = invoice.retailerId,
-                    partyType = "RETAILER",
-                    lineDescription = "فاتورة مبيعات كروت معدلة #${invoice.invoiceNumber} ($effectiveCustomer)"
-                )
-            )
-        } else {
-            val isCash = (invoice.paymentType.equals("CASH", ignoreCase = true) ||
-                          invoice.paymentType.equals("نقداً") ||
-                          invoice.paymentType.equals("نقد")) &&
-                         invoice.remainingAmount <= BigDecimal.ZERO
-            if (isCash) {
-                lines.add(
-                    JournalEntryLineEntity(
-                        headerId = existing.id,
-                        accountCode = "1101",
-                        accountName = "الصندوق الرئيسي (النقدية)",
-                        lineType = "DEBIT",
-                        debit = invoice.totalAmount,
-                        credit = BigDecimal.ZERO,
-                        lineDescription = "مبيعات نقدية فاتورة معدلة #${invoice.invoiceNumber} - $effectiveCustomer"
-                    )
-                )
-            } else {
-                if (invoice.paidAmount > BigDecimal.ZERO) {
-                    lines.add(
-                        JournalEntryLineEntity(
-                            headerId = existing.id,
-                            accountCode = "1101",
-                            accountName = "الصندوق الرئيسي (النقدية)",
-                            lineType = "DEBIT",
-                            debit = invoice.paidAmount,
-                            credit = BigDecimal.ZERO,
-                            lineDescription = "دفعة نقدية مسددة لفاتورة معدلة #${invoice.invoiceNumber}"
-                        )
-                    )
-                }
-                if (invoice.remainingAmount > BigDecimal.ZERO) {
-                    lines.add(
-                        JournalEntryLineEntity(
-                            headerId = existing.id,
-                            accountCode = "1201",
-                            accountName = "ذمم العملاء والوكلاء / $effectiveCustomer",
-                            lineType = "DEBIT",
-                            debit = invoice.remainingAmount,
-                            credit = BigDecimal.ZERO,
-                            lineDescription = "متبقي آجل فاتورة معدلة #${invoice.invoiceNumber}"
-                        )
-                    )
-                }
+            if (existing != null) {
+                db.journalEntryDao().voidEntryWithReversal(existing.id, invoice.voidReason.ifBlank { "إلغاء فاتورة المبيعات" }, performer)
             }
+            val cogsHeader = db.journalEntryDao().getActiveHeaderByReferenceWithAlt("COGS", invoice.invoiceNumber, invoice.id.toString())
+            if (cogsHeader != null) {
+                db.journalEntryDao().voidEntryWithReversal(cogsHeader.id, "إلغاء تكلفة بضاعة الفاتورة", performer)
+            }
+            return@withContext existing?.id
         }
 
-        lines.add(
-            JournalEntryLineEntity(
-                headerId = existing.id,
-                accountCode = "4101",
-                accountName = "إيرادات مبيعات كروت الشبكة",
-                lineType = "CREDIT",
-                debit = BigDecimal.ZERO,
-                credit = invoice.totalAmount,
-                partyId = invoice.retailerId,
-                partyType = if (invoice.retailerId != null) "RETAILER" else null,
-                lineDescription = "إيراد مبيعات فاتورة معدلة #${invoice.invoiceNumber}"
-            )
-        )
+        // عكس القيد السابق لحفظ مسار التدقيق الرقابي
+        if (existing != null) {
+            db.journalEntryDao().voidEntryWithReversal(existing.id, "قيد عكسي لتعديل فاتورة المبيعات #${invoice.invoiceNumber}", performer)
+        }
+        val existingCogs = db.journalEntryDao().getActiveHeaderByReferenceWithAlt("COGS", invoice.invoiceNumber, invoice.id.toString())
+        if (existingCogs != null) {
+            db.journalEntryDao().voidEntryWithReversal(existingCogs.id, "قيد عكسي لتعديل تكلفة فاتورة المبيعات #${invoice.invoiceNumber}", performer)
+        }
 
-        db.journalEntryDao().insertLines(lines)
-        db.journalEntryDao().updateHeader(
-            existing.copy(
-                totalDebit = invoice.totalAmount,
-                totalCredit = invoice.totalAmount,
-                dateMillis = invoice.invoiceDateMillis,
-                description = "فاتورة مبيعات كروت معدلة #${invoice.invoiceNumber} للعميل $effectiveCustomer"
-            )
-        )
-
-        existing.id
+        // ترحيل قيد جديد محدث بالفاتورة المعدلة
+        return@withContext postSalesInvoice(invoice, items, costMap, performer)
     }
 
     /**
@@ -677,117 +617,30 @@ class AccountingPostingService(private val db: AppDatabase) {
     ): Long? = withContext(Dispatchers.IO) {
         if (voucher.amount <= BigDecimal.ZERO) return@withContext null
 
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "FINANCIAL_VOUCHER",
             voucher.voucherNumber,
             voucher.id.toString()
         )
-        if (existing == null) {
-            return@withContext postFinancialVoucher(voucher, performer)
-        }
 
         if (voucher.isVoided) {
-            db.journalEntryDao().voidEntryWithReversal(existing.id, voucher.notes.ifBlank { "إلغاء السند المالي" }, performer)
-            return@withContext existing.id
+            if (existing != null) {
+                db.journalEntryDao().voidEntryWithReversal(existing.id, voucher.notes.ifBlank { "إلغاء السند المالي" }, performer)
+            }
+            return@withContext existing?.id
         }
 
-        val amountYer = convertToBaseCurrency(voucher.amount, voucher.currency)
-        if (amountYer <= BigDecimal.ZERO) return@withContext null
-
-        db.journalEntryDao().deleteLinesByHeaderId(existing.id)
-        val effectiveParty = voucher.partyName.ifBlank { "جهة عامة" }
-
-        val lines = if (voucher.voucherType == "RECEIPT") {
-            val (creditAccountCode, creditAccountName, partyId, partyType) = if (voucher.retailerId != null) {
-                Quadruple("1201", "ذمم العملاء والوكلاء / $effectiveParty", voucher.retailerId, "RETAILER")
-            } else if (voucher.invoiceId != null || voucher.invoiceNumber.isNotBlank()) {
-                val linkedInv = if (voucher.invoiceId != null) {
-                    db.cardSalesInvoiceDao().getInvoiceById(voucher.invoiceId)
-                } else {
-                    db.cardSalesInvoiceDao().getInvoiceByNumber(voucher.invoiceNumber)
-                }
-                if (linkedInv?.retailerId != null) {
-                    Quadruple("1201", "ذمم العملاء والوكلاء / ${linkedInv.customerName}", linkedInv.retailerId, "RETAILER")
-                } else {
-                    Quadruple("4101", "إيرادات مبيعات كروت الشبكة", null, null)
-                }
-            } else {
-                Quadruple("4101", "إيرادات مبيعات كروت الشبكة", null, null)
-            }
-
-            listOf(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "1101",
-                    accountName = "الصندوق الرئيسي (النقدية)",
-                    lineType = "DEBIT",
-                    debit = amountYer,
-                    credit = BigDecimal.ZERO,
-                    currency = voucher.currency,
-                    lineDescription = "قبض نقدية سند معدل #${voucher.voucherNumber} - ${voucher.description}"
-                ),
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = creditAccountCode,
-                    accountName = creditAccountName,
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = amountYer,
-                    currency = voucher.currency,
-                    partyId = partyId,
-                    partyType = partyType,
-                    lineDescription = "سداد/تحصيل سند معدل #${voucher.voucherNumber} - $effectiveParty"
-                )
-            )
-        } else {
-            val linkedPurchase = if (voucher.invoiceId != null) {
-                db.purchaseInvoiceDao().getInvoiceById(voucher.invoiceId)
-            } else if (voucher.invoiceNumber.isNotBlank()) {
-                db.purchaseInvoiceDao().getInvoiceByNumber(voucher.invoiceNumber)
-            } else null
-
-            val (debitCode, debitName) = if (linkedPurchase != null) {
-                Pair("2101", "الموردون وذمم المشتريات / $effectiveParty")
-            } else {
-                mapPaymentCategoryToAccount(voucher.category, effectiveParty)
-            }
-
-            listOf(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = debitCode,
-                    accountName = debitName,
-                    lineType = "DEBIT",
-                    debit = amountYer,
-                    credit = BigDecimal.ZERO,
-                    currency = voucher.currency,
-                    partyId = voucher.retailerId,
-                    lineDescription = "صرف نفقة سند معدل #${voucher.voucherNumber} - ${voucher.description}"
-                ),
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "1101",
-                    accountName = "الصندوق الرئيسي (النقدية)",
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = amountYer,
-                    currency = voucher.currency,
-                    lineDescription = "صرف نقدية سند معدل #${voucher.voucherNumber}"
-                )
+        // عكس القيد السابق لحفظ مسار التدقيق الرقابي المحاسبي
+        if (existing != null) {
+            db.journalEntryDao().voidEntryWithReversal(
+                existing.id,
+                "قيد عكسي لتعديل السند المالي #${voucher.voucherNumber}",
+                performer
             )
         }
 
-        db.journalEntryDao().insertLines(lines)
-        db.journalEntryDao().updateHeader(
-            existing.copy(
-                totalDebit = amountYer,
-                totalCredit = amountYer,
-                dateMillis = voucher.dateMillis,
-                description = "سند ${if (voucher.voucherType == "RECEIPT") "قبض" else "صرف"} معدل #${voucher.voucherNumber} - $effectiveParty"
-            )
-        )
-
-        existing.id
+        // ترحيل قيد جديد محدث بالسند المعدل
+        return@withContext postFinancialVoucher(voucher, performer)
     }
 
     /**
@@ -795,143 +648,34 @@ class AccountingPostingService(private val db: AppDatabase) {
      */
     suspend fun updatePurchaseInvoicePosting(
         invoice: PurchaseInvoiceEntity,
-        performer: String = "النظام المحاسبي"
+        performer: String = "المهندس سام"
     ): Long? = withContext(Dispatchers.IO) {
         if (invoice.totalAmount <= BigDecimal.ZERO) return@withContext null
 
-        val existing = db.journalEntryDao().getHeaderByReferenceWithAlt(
+        val existing = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
             "PURCHASE_INVOICE",
             invoice.invoiceNumber,
             invoice.id.toString()
         )
-        if (existing == null) {
-            return@withContext postPurchaseInvoice(invoice, performer)
-        }
 
         if (invoice.isVoided) {
-            db.journalEntryDao().voidEntryWithReversal(existing.id, invoice.voidReason.ifBlank { "إلغاء فاتورة المشتريات" }, performer)
-            return@withContext existing.id
+            if (existing != null) {
+                db.journalEntryDao().voidEntryWithReversal(existing.id, invoice.voidReason.ifBlank { "إلغاء فاتورة المشتريات" }, performer)
+            }
+            return@withContext existing?.id
         }
 
-        val rawOriginal = if (invoice.originalAmount > BigDecimal.ZERO) invoice.originalAmount else invoice.totalAmount
-        val totalYer = convertToBaseCurrency(rawOriginal, invoice.currency)
-        val rawPaid = if (invoice.paidAmount > BigDecimal.ZERO) invoice.paidAmount else BigDecimal.ZERO
-        val paidYer = convertToBaseCurrency(rawPaid, invoice.currency)
-        if (totalYer <= BigDecimal.ZERO) return@withContext null
-
-        db.journalEntryDao().deleteLinesByHeaderId(existing.id)
-
-        val target = invoice.targetType.trim().uppercase()
-        val (debitCode, debitName) = when {
-            target.contains("ASSET") || target.contains("CAPEX") || target.contains("أصول") || target.contains("معدات") ->
-                Pair("1501", "أصول ومعدات الشبكة (مشتريات رأسمالية)")
-            target.contains("INVENTORY") || target.contains("STOCK") || target.contains("مخزون") || target.contains("كروت") ->
-                Pair("1301", "مخزون كروت ومواد الشبكة")
-            target.contains("MAINT") || target.contains("صيانة") || target.contains("قطع") ->
-                Pair("5202", "مصروفات الصيانة وقطع الغيار")
-            target.contains("BANDWIDTH") || target.contains("INTERNET") || target.contains("نت") || target.contains("اشتراك") ->
-                Pair("5101", "تكلفة خدمة الإنترنت والمزودين (COGS)")
-            else ->
-                Pair("5201", "مصروفات تشغيلية وعمومية")
-        }
-
-        val lines = mutableListOf<JournalEntryLineEntity>()
-        lines.add(
-            JournalEntryLineEntity(
-                headerId = existing.id,
-                accountCode = debitCode,
-                accountName = debitName,
-                lineType = "DEBIT",
-                debit = totalYer,
-                credit = BigDecimal.ZERO,
-                currency = invoice.currency,
-                originalAmount = rawOriginal,
-                lineDescription = "فاتورة مشتريات معدلة #${invoice.invoiceNumber} من ${invoice.supplierName}"
-            )
-        )
-
-        val attachedVouchers = if (invoice.id > 0L) {
-            db.financialVoucherDao().getVouchersByInvoiceId(invoice.id)
-        } else {
-            db.financialVoucherDao().getVouchersByInvoiceNumber(invoice.invoiceNumber)
-        }
-        val hasLinkedPaymentVoucher = attachedVouchers.any { it.voucherType == "PAYMENT" && !it.isVoided }
-
-        val isPaidCash = !hasLinkedPaymentVoucher && (
-            invoice.paymentMethod.equals("CASH", ignoreCase = true) ||
-            invoice.paymentMethod.contains("نقد") ||
-            invoice.paymentMethod.contains("صندوق") ||
-            paidYer >= totalYer
-        )
-
-        if (isPaidCash) {
-            lines.add(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "1101",
-                    accountName = "الصندوق الرئيسي (النقدية)",
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = totalYer,
-                    currency = invoice.currency,
-                    originalAmount = rawOriginal,
-                    lineDescription = "سداد نقدي مشتريات فاتورة معدلة #${invoice.invoiceNumber}"
-                )
-            )
-        } else if (hasLinkedPaymentVoucher || paidYer <= BigDecimal.ZERO) {
-            lines.add(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "2101",
-                    accountName = "الموردون والدائنون / ${invoice.supplierName}",
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = totalYer,
-                    currency = invoice.currency,
-                    partyType = "SUPPLIER",
-                    lineDescription = "استحقاق للمورد فاتورة مشتريات معدلة #${invoice.invoiceNumber}"
-                )
-            )
-        } else {
-            val remainingYer = totalYer.subtract(paidYer)
-            lines.add(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "1101",
-                    accountName = "الصندوق الرئيسي (النقدية)",
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = paidYer,
-                    currency = invoice.currency,
-                    lineDescription = "دفعة مسددة مشتريات فاتورة معدلة #${invoice.invoiceNumber}"
-                )
-            )
-            lines.add(
-                JournalEntryLineEntity(
-                    headerId = existing.id,
-                    accountCode = "2101",
-                    accountName = "الموردون والدائنون / ${invoice.supplierName}",
-                    lineType = "CREDIT",
-                    debit = BigDecimal.ZERO,
-                    credit = remainingYer,
-                    currency = invoice.currency,
-                    partyType = "SUPPLIER",
-                    lineDescription = "المتبقي الآجل لمشتريات فاتورة معدلة #${invoice.invoiceNumber}"
-                )
+        // عكس القيد السابق لحفظ مسار التدقيق الرقابي
+        if (existing != null) {
+            db.journalEntryDao().voidEntryWithReversal(
+                existing.id,
+                "قيد عكسي لتعديل فاتورة المشتريات #${invoice.invoiceNumber}",
+                performer
             )
         }
 
-        db.journalEntryDao().insertLines(lines)
-        db.journalEntryDao().updateHeader(
-            existing.copy(
-                totalDebit = totalYer,
-                totalCredit = totalYer,
-                dateMillis = invoice.invoiceDateMillis,
-                description = "فاتورة مشتريات معدلة #${invoice.invoiceNumber} من ${invoice.supplierName}"
-            )
-        )
-
-        existing.id
+        // ترحيل قيد جديد محدث بفاتورة المشتريات المعدلة
+        return@withContext postPurchaseInvoice(invoice, performer)
     }
 
     /**
@@ -1006,6 +750,11 @@ class AccountingPostingService(private val db: AppDatabase) {
         if (cat.startsWith("1501") || cat.contains("1501")) return Pair("1501", "أصول ومعدات الشبكة (نفقات رأسمالية)")
         if (cat.startsWith("3201") || cat.contains("3201")) return Pair("3201", "جاري الشركاء والأرباح المسحوبة")
         if (cat.startsWith("2101") || cat.contains("2101")) return Pair("2101", "الموردون وذمم المشتريات / $partyName")
+
+        // 0.5. استرداد أو إلغاء فواتير المبيعات ومردوداتها (توجيه لمردودات المبيعات وليس المصروفات)
+        if (cat.contains("استرداد") || cat.contains("إلغاء فاتورة") || cat.contains("مردود") || cat.contains("مبيعات كروت")) {
+            return Pair("4101", "إيرادات ومردودات مبيعات كروت الشبكة")
+        }
 
         // 1. مسحوبات الشركاء وجاري الشركاء
         if (cat.contains("شريك") || cat.contains("مسحوبات") || cat.contains("أرباح") ||

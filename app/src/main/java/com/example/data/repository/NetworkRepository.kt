@@ -1465,6 +1465,7 @@ class NetworkRepository(private val db: AppDatabase) {
                     retailerId = finalRetailerId,
                     invoiceId = invoiceId,
                     invoiceNumber = invoiceNumber,
+                    invoiceKind = "SALES",
                     allocatedAmount = finalPaidAmount,
                     category = "مبيعات كروت",
                     paymentMethod = if (finalCanonicalType == "CASH") "نقداً" else "دفعة مقدمة",
@@ -1611,6 +1612,7 @@ class NetworkRepository(private val db: AppDatabase) {
                     retailerId = retailerId,
                     invoiceId = originalInvoice.id,
                     invoiceNumber = originalInvoice.invoiceNumber,
+                    invoiceKind = "SALES",
                     allocatedAmount = paymentDelta,
                     dateMillis = System.currentTimeMillis()
                 )
@@ -1620,7 +1622,8 @@ class NetworkRepository(private val db: AppDatabase) {
                 } catch (e: Exception) {
                     android.util.Log.e("NetworkRepository", "Error posting receipt voucher on edit: ${e.message}", e)
                 }
-            } else if (paymentDelta < java.math.BigDecimal.ZERO) {
+            } else if (paymentDelta < java.math.BigDecimal.ZERO && retailerId == null) {
+                // للعملاء النقديين المباشرين فقط عند رد مبالغ نقدية فعلية، أما البقالات فتُسوّى في ذمم العملاء
                 val refundAmount = paymentDelta.abs()
                 val voucherNum = db.numberSequenceDao().getNextNumber("PAY", docYear, "PAY")
                 val voucher = FinancialVoucherEntity(
@@ -1630,12 +1633,13 @@ class NetworkRepository(private val db: AppDatabase) {
                     partyName = customerName,
                     category = "استرداد/تسوية مبيعات كروت",
                     paymentMethod = "نقداً",
-                    description = "سند صرف استرداد/تسوية لتعديل فاتورة مبيعات #${originalInvoice.invoiceNumber} ($itemsSummary)",
+                    description = "سند صرف استرداد لتعديل فاتورة مبيعات #${originalInvoice.invoiceNumber} ($itemsSummary)",
                     issuerName = issuerName,
                     notes = notes,
-                    retailerId = retailerId,
+                    retailerId = null,
                     invoiceId = originalInvoice.id,
                     invoiceNumber = originalInvoice.invoiceNumber,
+                    invoiceKind = "SALES",
                     allocatedAmount = refundAmount,
                     dateMillis = System.currentTimeMillis()
                 )
@@ -1957,31 +1961,32 @@ class NetworkRepository(private val db: AppDatabase) {
                 // 1. استرجاع الكميات للمخزن مع تسجيل حركة الإلغاء
                 returnInvoiceToInventory(invoice, "استرجاع كميات بسبب حذف/إلغاء الفاتورة")
 
-                // 2. عدم حذف سندات القبض القديمة المرتبطة بالفاتورة نهائياً لحفظ السجل المالي
-                // إنشاء سند صرف/تسوية (PAYMENT) بمقدار المبلغ المسدد لحفظ توازن الصندوق عند وجود سداد
-                if (invoice.paidAmount > java.math.BigDecimal.ZERO) {
-                    val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-                    val cancelVoucherNum = db.numberSequenceDao().getNextNumber("PAY", currentYear, "PAY")
-                    val voucher = FinancialVoucherEntity(
-                        voucherNumber = cancelVoucherNum,
-                        voucherType = "PAYMENT",
-                        amount = invoice.paidAmount,
-                        partyName = invoice.customerName.ifBlank { "عميل نقدي" },
-                        category = "إلغاء/استرداد فاتورة مبيعات",
-                        paymentMethod = "نقداً",
-                        description = "سند صرف تسوية بسبب إلغاء/حذف فاتورة مبيعات رقم ${invoice.invoiceNumber}",
-                        issuerName = invoice.issuerName.ifBlank { "المهندس حسن" },
-                        notes = "إلغاء/حذف الفاتورة #${invoice.invoiceNumber}",
-                        retailerId = invoice.retailerId,
-                        invoiceId = invoice.id,
-                        invoiceNumber = invoice.invoiceNumber,
-                        allocatedAmount = invoice.paidAmount
-                    )
-                    db.financialVoucherDao().insertVoucher(voucher)
-                    try {
-                        postingService.postFinancialVoucher(voucher)
-                    } catch (e: Exception) {
-                        android.util.Log.e("NetworkRepository", "Error posting cancel voucher: ${e.message}", e)
+                // 2. إلغاء سندات القبض المرتبطة بالفاتورة بقيد عكسي تسوية يحفظ مسار التدقيق دون إنشاء سند صرف إضافي
+                val linkedVouchers = if (invoice.id > 0L) {
+                    db.financialVoucherDao().getVouchersByInvoiceId(invoice.id)
+                } else {
+                    db.financialVoucherDao().getVouchersByInvoiceNumber(invoice.invoiceNumber)
+                }
+                for (voucher in linkedVouchers) {
+                    if (!voucher.isVoided) {
+                        db.financialVoucherDao().updateVoucher(
+                            voucher.copy(
+                                isVoided = true,
+                                notes = (voucher.notes + " (ملغى بسبب حذف الفاتورة #${invoice.invoiceNumber})").trim()
+                            )
+                        )
+                        val vHeader = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
+                            "FINANCIAL_VOUCHER",
+                            voucher.voucherNumber,
+                            voucher.id.toString()
+                        )
+                        if (vHeader != null) {
+                            db.journalEntryDao().voidEntryWithReversal(
+                                vHeader.id,
+                                "إلغاء سند قبض بسبب حذف الفاتورة #${invoice.invoiceNumber}",
+                                invoice.issuerName.ifBlank { "النظام المحاسبي" }
+                            )
+                        }
                     }
                 }
 
@@ -2282,6 +2287,7 @@ class NetworkRepository(private val db: AppDatabase) {
                     retailerId = retailerId,
                     invoiceId = invoiceId,
                     invoiceNumber = invoiceNumber,
+                    invoiceKind = "SALES",
                     allocatedAmount = totalWholesale,
                     category = "مبيعات كروت",
                     paymentMethod = paymentMethod,
@@ -3061,52 +3067,8 @@ class NetworkRepository(private val db: AppDatabase) {
                 updatedAsset.id
             }
 
-            if (isNew && baseCost > BigDecimal.ZERO) {
-                val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-                val entryNumber = db.numberSequenceDao().getNextNumber("JE", currentYear, "JE")
-                db.journalEntryDao().postBalancedEntry(
-                    JournalEntryHeaderEntity(
-                        entryNumber = entryNumber,
-                        referenceType = "FIXED_ASSET_PURCHASE",
-                        referenceId = aId.toString(),
-                        description = "شراء أصل ثابت: ${updatedAsset.assetName}",
-                        createdBy = "المهندس سام"
-                    ),
-                    listOf(
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1501",
-                            accountName = "الأصول الرأسمالية الثابتة / ${updatedAsset.category} - ${updatedAsset.assetName}",
-                            lineType = "DEBIT",
-                            debit = baseCost,
-                            currency = updatedAsset.currency.ifBlank { "USD" }
-                        ),
-                        JournalEntryLineEntity(
-                            headerId = 0L,
-                            accountCode = "1101",
-                            accountName = "الصندوق الرئيسي (النقدية)",
-                            lineType = "CREDIT",
-                            credit = baseCost,
-                            currency = updatedAsset.currency.ifBlank { "USD" }
-                        )
-                    )
-                )
-
-                db.journalEntryDao().insertEntry(
-                    JournalEntryEntity(
-                        entryNumber = entryNumber,
-                        referenceType = "FIXED_ASSET_PURCHASE",
-                        referenceId = aId.toString(),
-                        debitAccount = "1501 - الأصول الثابتة / ${updatedAsset.category} - ${updatedAsset.assetName}",
-                        creditAccount = "1101 - الصندوق الرئيسي",
-                        amount = baseCost,
-                        currency = updatedAsset.currency.ifBlank { "USD" },
-                        exchangeRate = BigDecimal.ONE,
-                        description = "شراء أصل ثابت: ${updatedAsset.assetName}",
-                        createdBy = "المهندس سام"
-                    )
-                )
-            }
+            // لا ننشئ قيد يومية مباشر هنا لتفادي مضاعفة الأصول ونقصان الصندوق مرتين،
+            // فالأصول تسجّل قيودها المحاسبية حصرياً عبر فاتورة المشتريات أو سند الصرف
             aId
         }
     }
@@ -3119,7 +3081,10 @@ class NetworkRepository(private val db: AppDatabase) {
     val allInvoices: Flow<List<PurchaseInvoiceEntity>> = db.purchaseInvoiceDao().getAllInvoices()
     val totalInvoicesAmount: Flow<Double?> = db.purchaseInvoiceDao().getTotalInvoicesAmount()
 
-    suspend fun saveInvoice(invoice: PurchaseInvoiceEntity): Long = withContext(Dispatchers.IO) {
+    suspend fun saveInvoice(
+        invoice: PurchaseInvoiceEntity,
+        paymentVoucher: FinancialVoucherEntity? = null
+    ): Long = withContext(Dispatchers.IO) {
         db.withTransaction {
             val identity = db.networkIdentityDao().getNetworkIdentity() ?: NetworkIdentityEntity()
             val sarRate = BigDecimal.valueOf(if (identity.sarToYerRate > 0) identity.sarToYerRate else 140.0)
@@ -3138,6 +3103,21 @@ class NetworkRepository(private val db: AppDatabase) {
             } else {
                 db.purchaseInvoiceDao().updateInvoice(updatedInvoice)
                 updatedInvoice.id
+            }
+
+            // إذا وُجد سند صرف مسدد للفاتورة، يتم إدخاله أولاً في الداتابيس لتكتشفه postPurchaseInvoice
+            if (paymentVoucher != null) {
+                val voucherToInsert = paymentVoucher.copy(
+                    invoiceId = invId,
+                    invoiceNumber = updatedInvoice.invoiceNumber,
+                    invoiceKind = "PURCHASE"
+                )
+                db.financialVoucherDao().insertVoucher(voucherToInsert)
+                try {
+                    postingService.postFinancialVoucher(voucherToInsert, voucherToInsert.issuerName)
+                } catch (e: Exception) {
+                    android.util.Log.e("NetworkRepository", "Error posting payment voucher for purchase: ${e.message}", e)
+                }
             }
 
             // ترحيل فاتورة المشتريات مركزياً عبر المحرك المحاسبي الموحد
@@ -3166,9 +3146,41 @@ class NetworkRepository(private val db: AppDatabase) {
             val voided = invoice.copy(isVoided = true, status = "VOIDED", voidReason = "إلغاء فاتورة المشتريات وتسوية الدفاتر")
             db.purchaseInvoiceDao().updateInvoice(voided)
 
+            // إلغاء سندات الصرف المرتبطة بالفاتورة بقيد عكسي تسوية
+            val linkedVouchers = if (invoice.id > 0L) {
+                db.financialVoucherDao().getVouchersByInvoiceId(invoice.id)
+            } else {
+                db.financialVoucherDao().getVouchersByInvoiceNumber(invoice.invoiceNumber)
+            }
+            for (v in linkedVouchers) {
+                if (!v.isVoided) {
+                    db.financialVoucherDao().updateVoucher(
+                        v.copy(
+                            isVoided = true,
+                            notes = (v.notes + " (ملغى لإلغاء فاتورة المشتريات #${invoice.invoiceNumber})").trim()
+                        )
+                    )
+                    val vHeader = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
+                        "FINANCIAL_VOUCHER",
+                        v.voucherNumber,
+                        v.id.toString()
+                    )
+                    if (vHeader != null) {
+                        db.journalEntryDao().voidEntryWithReversal(
+                            vHeader.id,
+                            "إلغاء سند صرف بسبب إلغاء فاتورة المشتريات #${invoice.invoiceNumber}",
+                            "المهندس سام"
+                        )
+                    }
+                }
+            }
+
             try {
-                val header = db.journalEntryDao().getHeaderByReference("PURCHASE_INVOICE", invoice.invoiceNumber)
-                    ?: db.journalEntryDao().getHeaderByReference("PURCHASE_INVOICE", invoice.id.toString())
+                val header = db.journalEntryDao().getActiveHeaderByReferenceWithAlt(
+                    "PURCHASE_INVOICE",
+                    invoice.invoiceNumber,
+                    invoice.id.toString()
+                )
                 if (header != null) {
                     db.journalEntryDao().voidEntryWithReversal(header.id, "إلغاء فاتورة المشتريات #${invoice.invoiceNumber}", "المهندس سام")
                 }

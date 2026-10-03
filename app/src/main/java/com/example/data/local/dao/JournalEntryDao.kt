@@ -63,6 +63,34 @@ interface JournalEntryDao {
     @Query("SELECT * FROM journal_entry_headers WHERE referenceType = :refType AND (referenceId = :refId OR referenceId = :altRefId) LIMIT 1")
     suspend fun getHeaderByReferenceWithAlt(refType: String, refId: String, altRefId: String): JournalEntryHeaderEntity?
 
+    @Query(
+        """
+        SELECT * FROM journal_entry_headers 
+        WHERE referenceType = :refType 
+          AND (referenceId = :refId OR referenceId = :altRefId) 
+          AND status = 'POSTED' 
+          AND voidReason IS NULL 
+          AND reversalOfEntryId IS NULL 
+          AND id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+        LIMIT 1
+        """
+    )
+    suspend fun getActiveHeaderByReferenceWithAlt(refType: String, refId: String, altRefId: String): JournalEntryHeaderEntity?
+
+    @Query(
+        """
+        SELECT * FROM journal_entry_headers 
+        WHERE referenceType = :refType 
+          AND referenceId = :refId 
+          AND status = 'POSTED' 
+          AND voidReason IS NULL 
+          AND reversalOfEntryId IS NULL 
+          AND id NOT IN (SELECT reversalOfEntryId FROM journal_entry_headers WHERE reversalOfEntryId IS NOT NULL)
+        LIMIT 1
+        """
+    )
+    suspend fun getActiveHeaderByReference(refType: String, refId: String): JournalEntryHeaderEntity?
+
     @Query("DELETE FROM journal_entry_lines WHERE headerId = :headerId")
     suspend fun deleteLinesByHeaderId(headerId: Long)
 

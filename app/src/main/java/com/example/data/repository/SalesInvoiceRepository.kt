@@ -140,6 +140,7 @@ class SalesInvoiceRepository(private val db: AppDatabase) {
                     retailerId = retailerId,
                     invoiceId = invoiceId,
                     invoiceNumber = invoiceNumber,
+                    invoiceKind = "SALES",
                     allocatedAmount = finalPaidAmount,
                     category = "مبيعات كروت",
                     paymentMethod = if (finalCanonicalType == "CASH") "نقداً" else "دفعة مقدمة",

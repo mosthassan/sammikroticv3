@@ -78,7 +78,7 @@ import kotlinx.coroutines.launch
         CurrencyRateEntity::class,
         NumberSequenceEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = false
 )
 @TypeConverters(BigDecimalConverter::class)
@@ -427,6 +427,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE `financial_vouchers` ADD COLUMN `invoiceKind` TEXT")
+                } catch (_: Exception) {}
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -441,7 +449,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_17_18,
                         MIGRATION_18_19,
                         MIGRATION_19_20,
-                        MIGRATION_20_21
+                        MIGRATION_20_21,
+                        MIGRATION_21_22
                     )
                     .addCallback(AppDatabaseCallback())
                     .build()

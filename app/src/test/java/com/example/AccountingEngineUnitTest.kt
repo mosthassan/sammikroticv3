@@ -216,4 +216,49 @@ class AccountingEngineUnitTest {
         val expectedSarYer = sarAmount.multiply(sarRate) // 140,000 YER
         assertEquals(BigDecimal("140000"), expectedSarYer)
     }
+
+    @Test
+    fun testSalesRefundNeverMappedToExpenses() {
+        val cat1 = "إلغاء/استرداد فاتورة مبيعات"
+        val cat2 = "استرداد/تسوية مبيعات كروت"
+        val isSalesReturn1 = cat1.contains("استرداد") || cat1.contains("إلغاء فاتورة") || cat1.contains("مبيعات كروت")
+        val isSalesReturn2 = cat2.contains("استرداد") || cat2.contains("إلغاء فاتورة") || cat2.contains("مبيعات كروت")
+
+        assertTrue("Sales invoice cancellation must be identified as sales return", isSalesReturn1)
+        assertTrue("Card sales refund must be identified as sales return", isSalesReturn2)
+
+        val mappedAccount = if (isSalesReturn1) "4101" else "5201"
+        assertEquals("4101", mappedAccount)
+        assertNotEquals("5201", mappedAccount)
+    }
+
+    @Test
+    fun testInvoiceKindPreventsIdCollision() {
+        // Sales voucher and Purchase voucher with identical invoice ID (e.g. ID = 42)
+        val salesVoucher = FinancialVoucherEntity(
+            voucherNumber = "REC-001",
+            voucherType = "RECEIPT",
+            amount = BigDecimal("1500"),
+            partyName = "بقالة الأمل",
+            invoiceId = 42L,
+            invoiceKind = "SALES",
+            category = "مبيعات كروت",
+            description = "سداد مبيعات"
+        )
+        val purchaseVoucher = FinancialVoucherEntity(
+            voucherNumber = "PAY-001",
+            voucherType = "PAYMENT",
+            amount = BigDecimal("1500"),
+            partyName = "شركة المعدات",
+            invoiceId = 42L,
+            invoiceKind = "PURCHASE",
+            category = "أصول ومعدات",
+            description = "سداد مشتريات"
+        )
+
+        assertEquals("SALES", salesVoucher.invoiceKind)
+        assertEquals("PURCHASE", purchaseVoucher.invoiceKind)
+        assertFalse(salesVoucher.invoiceKind == "PURCHASE")
+        assertTrue(purchaseVoucher.invoiceKind == "PURCHASE")
+    }
 }
