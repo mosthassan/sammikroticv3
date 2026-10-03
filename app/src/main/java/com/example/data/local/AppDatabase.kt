@@ -78,7 +78,7 @@ import kotlinx.coroutines.launch
         CurrencyRateEntity::class,
         NumberSequenceEntity::class
     ],
-    version = 23,
+    version = 24,
     exportSchema = false
 )
 @TypeConverters(BigDecimalConverter::class)
@@ -435,47 +435,98 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private fun rebuildFinancialVouchersTable(db: SupportSQLiteDatabase) {
+            try {
+                // 1. Backfill invoiceKind based on actual matching invoices
+                db.execSQL("""
+                    UPDATE `financial_vouchers`
+                    SET `invoiceKind` = 'SALES'
+                    WHERE (`invoiceKind` IS NULL OR `invoiceKind` = '' OR `invoiceKind` = 'NONE')
+                      AND (`invoiceNumber` IN (SELECT `invoiceNumber` FROM `card_sales_invoices`)
+                           OR `invoiceId` IN (SELECT `id` FROM `card_sales_invoices`))
+                """.trimIndent())
+
+                db.execSQL("""
+                    UPDATE `financial_vouchers`
+                    SET `invoiceKind` = 'PURCHASE'
+                    WHERE (`invoiceKind` IS NULL OR `invoiceKind` = '' OR `invoiceKind` = 'NONE')
+                      AND (`invoiceNumber` IN (SELECT `invoiceNumber` FROM `purchase_invoices`)
+                           OR `invoiceId` IN (SELECT `id` FROM `purchase_invoices`))
+                """.trimIndent())
+
+                db.execSQL("""
+                    UPDATE `financial_vouchers`
+                    SET `invoiceKind` = 'NONE'
+                    WHERE `invoiceKind` IS NULL OR `invoiceKind` = ''
+                """.trimIndent())
+            } catch (e: Exception) {
+                android.util.Log.e("AppDatabase", "Error backfilling invoiceKind: ${e.message}")
+            }
+
+            try {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `financial_vouchers_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `voucherNumber` TEXT NOT NULL,
+                        `voucherType` TEXT NOT NULL,
+                        `amount` TEXT NOT NULL,
+                        `currency` TEXT NOT NULL,
+                        `originalAmount` TEXT NOT NULL,
+                        `partyName` TEXT NOT NULL,
+                        `retailerId` INTEGER,
+                        `invoiceId` INTEGER,
+                        `invoiceNumber` TEXT NOT NULL,
+                        `invoiceKind` TEXT NOT NULL,
+                        `allocatedAmount` TEXT NOT NULL,
+                        `category` TEXT NOT NULL,
+                        `paymentMethod` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `issuerName` TEXT NOT NULL,
+                        `dateMillis` INTEGER NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `isVoided` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    INSERT INTO `financial_vouchers_new` (
+                        `id`, `voucherNumber`, `voucherType`, `amount`, `currency`, `originalAmount`,
+                        `partyName`, `retailerId`, `invoiceId`, `invoiceNumber`, `invoiceKind`,
+                        `allocatedAmount`, `category`, `paymentMethod`, `description`, `issuerName`,
+                        `dateMillis`, `notes`, `isVoided`
+                    ) SELECT 
+                        `id`, `voucherNumber`, `voucherType`, `amount`, `currency`, `originalAmount`,
+                        `partyName`, `retailerId`, `invoiceId`, `invoiceNumber`, COALESCE(`invoiceKind`, 'NONE'),
+                        `allocatedAmount`, `category`, `paymentMethod`, `description`, `issuerName`,
+                        `dateMillis`, `notes`, `isVoided`
+                    FROM `financial_vouchers`
+                """.trimIndent())
+
+                db.execSQL("DROP TABLE `financial_vouchers`")
+                db.execSQL("ALTER TABLE `financial_vouchers_new` RENAME TO `financial_vouchers`")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_financial_vouchers_voucherNumber` ON `financial_vouchers` (`voucherNumber`)")
+            } catch (e: Exception) {
+                android.util.Log.e("AppDatabase", "Error rebuilding financial_vouchers table: ${e.message}")
+            }
+
+            try {
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_card_sales_invoices_invoiceNumber` ON `card_sales_invoices` (`invoiceNumber`)")
+            } catch (_: Exception) {}
+
+            try {
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_invoices_invoiceNumber` ON `purchase_invoices` (`invoiceNumber`)")
+            } catch (_: Exception) {}
+        }
+
         val MIGRATION_22_23 = object : Migration(22, 23) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
-                    // Backfill invoiceKind based on actual matching invoices
-                    db.execSQL("""
-                        UPDATE financial_vouchers
-                        SET invoiceKind = 'SALES'
-                        WHERE (invoiceKind IS NULL OR invoiceKind = '' OR invoiceKind = 'NONE')
-                          AND (invoiceNumber IN (SELECT invoiceNumber FROM card_sales_invoices)
-                               OR invoiceId IN (SELECT id FROM card_sales_invoices))
-                    """.trimIndent())
+                rebuildFinancialVouchersTable(db)
+            }
+        }
 
-                    db.execSQL("""
-                        UPDATE financial_vouchers
-                        SET invoiceKind = 'PURCHASE'
-                        WHERE (invoiceKind IS NULL OR invoiceKind = '' OR invoiceKind = 'NONE')
-                          AND (invoiceNumber IN (SELECT invoiceNumber FROM purchase_invoices)
-                               OR invoiceId IN (SELECT id FROM purchase_invoices))
-                    """.trimIndent())
-
-                    db.execSQL("""
-                        UPDATE financial_vouchers
-                        SET invoiceKind = 'NONE'
-                        WHERE invoiceKind IS NULL
-                    """.trimIndent())
-                } catch (e: Exception) {
-                    android.util.Log.e("AppDatabase", "Error migrating invoiceKind: ${e.message}")
-                }
-
-                // Add unique indexes for natural keys
-                try {
-                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_financial_vouchers_voucherNumber` ON `financial_vouchers` (`voucherNumber`)")
-                } catch (_: Exception) {}
-
-                try {
-                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_card_sales_invoices_invoiceNumber` ON `card_sales_invoices` (`invoiceNumber`)")
-                } catch (_: Exception) {}
-
-                try {
-                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_invoices_invoiceNumber` ON `purchase_invoices` (`invoiceNumber`)")
-                } catch (_: Exception) {}
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                rebuildFinancialVouchersTable(db)
             }
         }
 
@@ -495,7 +546,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_19_20,
                         MIGRATION_20_21,
                         MIGRATION_21_22,
-                        MIGRATION_22_23
+                        MIGRATION_22_23,
+                        MIGRATION_23_24
                     )
                     .addCallback(AppDatabaseCallback())
                     .build()
