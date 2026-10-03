@@ -136,25 +136,17 @@ object CurrencyHelper {
     }
 
     /**
-     * تنسيق المبلغ مع رمز العملة
+     * تنسيق المبلغ مع رمز العملة عبر الدالة الموحدة toCleanCurrency
      */
     fun formatAmount(amount: BigDecimal, currency: String = CURRENCY_YER): String {
-        val scaledAmount = amount.setScale(2, RoundingMode.HALF_UP)
-        val symbols = DecimalFormatSymbols(Locale.US)
-        val df = if (scaledAmount.remainder(BigDecimal.ONE).compareTo(BigDecimal.ZERO) == 0) {
-            DecimalFormat("#,##0", symbols)
-        } else {
-            DecimalFormat("#,##0.00", symbols)
-        }
-        val formatted = df.format(scaledAmount)
-        return "$formatted ${getCurrencySymbol(currency)}"
+        return amount.toCleanCurrency(currency)
     }
 
     fun formatAmount(amount: Double, currency: String = CURRENCY_YER): String {
-        return formatAmount(BigDecimal.valueOf(amount), currency)
+        return amount.toCleanCurrency(currency)
     }
 
     fun formatAmount(amount: Number, currency: String = CURRENCY_YER): String {
-        return formatAmount(BigDecimal.valueOf(amount.toDouble()), currency)
+        return amount.toDouble().toCleanCurrency(currency)
     }
 }

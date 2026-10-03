@@ -324,30 +324,17 @@ fun VouchersListSubScreen(
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = {
-                            viewModel.deduplicateVouchers { count ->
-                                val msg = if (count > 0) "تم تنظيف وحذف $count سند مكرر بنجاح ✓" else "جميع السندات فريدة ولا توجد تكرارات ✓"
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("deduplicate_vouchers_button")
-                    ) {
-                        Text("إزالة التكرار", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = CairoFontFamily)
-                    }
-
-                    Button(
-                        onClick = { onOpenScanDialog("EXPENSES") },
-                        colors = ButtonDefaults.buttonColors(containerColor = PaymentRed.copy(alpha = 0.9f)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("scan_invoice_vouchers_header_button")
-                    ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("مسح فاتورة (AI)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        viewModel.deduplicateVouchers { count ->
+                            val msg = if (count > 0) "تم تنظيف وحذف $count سند مكرر بنجاح ✓" else "جميع السندات فريدة ولا توجد تكرارات ✓"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("deduplicate_vouchers_button")
+                ) {
+                    Text("إزالة التكرار", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = CairoFontFamily)
                 }
             }
 

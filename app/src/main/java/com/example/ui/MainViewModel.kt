@@ -1041,10 +1041,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Dynamically sum GL Account 1201 positive net balances for all retailers
     val totalShopsDebt: StateFlow<java.math.BigDecimal> = kotlinx.coroutines.flow.combine(retailers, customerGlBalances) { list, balancesMap ->
-        list.fold(java.math.BigDecimal.ZERO) { acc, r ->
+        val mappedSum = list.fold(java.math.BigDecimal.ZERO) { acc, r ->
             val bal = balancesMap[r.id] ?: java.math.BigDecimal.ZERO
             acc.add(bal.coerceAtLeast(java.math.BigDecimal.ZERO))
         }
+        val unmappedPositiveSum = balancesMap.filter { entry ->
+            list.none { it.id == entry.key } && entry.value > java.math.BigDecimal.ZERO
+        }.values.fold(java.math.BigDecimal.ZERO) { acc, b -> acc.add(b) }
+        mappedSum.add(unmappedPositiveSum)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), java.math.BigDecimal.ZERO)
 
     suspend fun getPartyBalance(accountCode: String = "1201", partyId: Long): java.math.BigDecimal {

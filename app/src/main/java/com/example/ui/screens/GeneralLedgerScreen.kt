@@ -175,7 +175,7 @@ fun GeneralLedgerScreen(
                         )
                     }
 
-                    IconButton(
+                    OutlinedButton(
                         onClick = {
                             val r = ledgerReport
                             if (r != null) {
@@ -195,11 +195,18 @@ fun GeneralLedgerScreen(
                                 clipboardManager.setText(AnnotatedString(text))
                                 Toast.makeText(context, "تم نسخ تقرير دفتر الأستاذ إلى الحافظة ✓", Toast.LENGTH_SHORT).show()
                             }
-                        }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberBorder),
+                        modifier = Modifier.height(34.dp)
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = "مشاركة", tint = MikroTikCyan)
+                        Icon(Icons.Default.Share, contentDescription = "مشاركة", tint = MikroTikCyan, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("مشاركة", fontFamily = CairoFontFamily, fontSize = 11.sp, color = MikroTikCyan)
                     }
                 }
+                Spacer(modifier = Modifier.height(4.dp))
             }
 
             // شريط اختيار الحساب (1101 إلى 5203)
@@ -656,7 +663,7 @@ fun GeneralLedgerMovementCard(
                 if (item.debit > BigDecimal.ZERO) {
                     Column {
                         Text("مدين (Debit)", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
-                        Text("+${item.debit.toCleanCurrency("YER")}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ReceiptGreen, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                        Text(item.debit.toCleanCurrency("YER"), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ReceiptGreen, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Column {
@@ -668,7 +675,7 @@ fun GeneralLedgerMovementCard(
                 if (item.credit > BigDecimal.ZERO) {
                     Column {
                         Text("دائن (Credit)", fontFamily = CairoFontFamily, fontSize = 10.sp, color = TextSecondaryDark)
-                        Text("-${item.credit.toCleanCurrency("YER")}", fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                        Text(item.credit.toCleanCurrency("YER"), fontFamily = CairoFontFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Column {
@@ -684,7 +691,7 @@ fun GeneralLedgerMovementCard(
                         fontFamily = CairoFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,
-                        color = ProfitEmerald,
+                        color = if (item.runningBalance >= BigDecimal.ZERO) ProfitEmerald else PaymentRed,
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Ellipsis

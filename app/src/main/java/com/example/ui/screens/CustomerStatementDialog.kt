@@ -394,7 +394,9 @@ private fun KpiCard(
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.5.sp,
                 color = TextPrimaryDark,
-                maxLines = 1
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -719,7 +721,7 @@ private fun generateWhatsAppStatementText(
         for (line in recentLines) {
             running = running.add(line.debit).subtract(line.credit)
             val dStr = SimpleDateFormat("MM/dd", Locale.getDefault()).format(Date(line.dateMillis))
-            val typeStr = if (line.debit > BigDecimal.ZERO) "فاتورة (+${line.debit.toCleanCurrency("YER")})" else "سداد (-${line.credit.toCleanCurrency("YER")})"
+            val typeStr = if (line.debit > BigDecimal.ZERO) "فاتورة (${line.debit.toCleanCurrency("YER")})" else "سداد (${line.credit.toCleanCurrency("YER")})"
             val ref = line.referenceId.ifBlank { line.entryNumber }
             builder.appendLine("• $dStr | $typeStr | #$ref | الرصيد: ${running.toCleanCurrency("YER")}")
         }

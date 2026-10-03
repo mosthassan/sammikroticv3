@@ -195,10 +195,14 @@ fun DistributionScreen(
 
     // احتساب إجمالي ديون المحلات الحقيقية ديناميكياً من حساب 1201 بدون الاعتماد على رصيد ثابت موروث
     val totalShopsDebt = remember(retailers, customerGlBalances) {
-        retailers.fold(BigDecimal.ZERO) { sum, r ->
+        val mappedSum = retailers.fold(BigDecimal.ZERO) { sum, r ->
             val bal = customerGlBalances[r.id] ?: BigDecimal.ZERO
             sum.add(bal.coerceAtLeast(BigDecimal.ZERO))
         }
+        val unmappedPositiveSum = customerGlBalances.filter { entry ->
+            retailers.none { it.id == entry.key } && entry.value > BigDecimal.ZERO
+        }.values.fold(BigDecimal.ZERO) { acc, b -> acc.add(b) }
+        mappedSum.add(unmappedPositiveSum)
     }
     val totalActiveCardsWithRetailers = dynamicRetailers.sumOf { it.activeCardsCount }
 
@@ -740,7 +744,7 @@ fun DistributionScreen(
                     ) { voucherNumber ->
                         viewModel.reconcileAccountingLedger()
                         showQuickPayDialog = null
-                        Toast.makeText(context, "تم إنشاء سند قبض بمبلغ $amount ريال وتخفيض مديونية البقالة ✓", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "تم إنشاء سند قبض بمبلغ ${amount.toCleanCurrency("YER")} وتخفيض مديونية البقالة ✓", Toast.LENGTH_LONG).show()
 
                         if (sendWhatsAppReceipt && r.phone.isNotBlank()) {
                             val savedReceiptVoucher = com.example.data.local.entity.FinancialVoucherEntity(
@@ -1565,7 +1569,7 @@ fun DistributeCardsDialog(
                     ) {
                         inventoryItems.forEach { item ->
                             DropdownMenuItem(
-                                text = { Text("${item.packageName} - جملة ${item.wholesalePrice.toInt()} ريال (متاح: ${item.quantityAvailable})") },
+                                text = { Text("${item.packageName} - جملة ${item.wholesalePrice.toCleanCurrency("YER")} (متاح: ${item.quantityAvailable})") },
                                 onClick = {
                                     selectedItem = item
                                     isItemExpanded = false
@@ -1598,7 +1602,7 @@ fun DistributeCardsDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "$qty كرت × ${wholesalePrice.toInt()} ريال = ${totalAmount.toInt()} ريال",
+                            text = "$qty كرت × ${wholesalePrice.toCleanCurrency("YER")} = ${totalAmount.toCleanCurrency("YER")}",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = StatusWarning

@@ -435,7 +435,15 @@ fun DistributorKpiCard(
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(text = value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(
+                text = value,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
             Text(text = title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
             Text(text = subtitle, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

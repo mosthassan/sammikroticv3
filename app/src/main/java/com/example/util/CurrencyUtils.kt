@@ -37,6 +37,10 @@ fun Double.toCleanCurrency(currency: String = "YER", forceDecimals: Boolean = fa
     return BigDecimal.valueOf(this).toCleanCurrency(currency, forceDecimals)
 }
 
+fun Float.toCleanCurrency(currency: String = "YER", forceDecimals: Boolean = false): String {
+    return BigDecimal.valueOf(this.toDouble()).toCleanCurrency(currency, forceDecimals)
+}
+
 fun Long.toCleanCurrency(currency: String = "YER", forceDecimals: Boolean = false): String {
     return BigDecimal.valueOf(this).toCleanCurrency(currency, forceDecimals)
 }

@@ -1007,11 +1007,14 @@ fun ReportKpiCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "${String.format(Locale.US, "%,.0f", amount)} ر.ي",
+                text = amount.toCleanCurrency("YER"),
                 fontFamily = CairoFontFamily,
-                fontSize = 16.sp,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
-                color = color
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
 
             Text(
